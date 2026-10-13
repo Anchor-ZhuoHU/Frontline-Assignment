@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "id": "agreement_happy_path",
+  "call_type": "inbound_freight_negotiation",
+  "description": "A verified carrier accepts a load at 1650 and the agreement is persisted.",
+  "tags": ["agreement", "price_integrity", "walking_skeleton"],
+  "fixture_trace": "traces/agreement_happy_path.json",
+  "expected": {
+    "checks": [
+      {
+        "id": "agreement.correct_price",
+        "type": "tool_called",
+        "name": "record_agreement",
+        "args": {
+          "agreed_price": 1650
+        },
+        "severity": "critical"
+      }
+    ]
+  }
+}
