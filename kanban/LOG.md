@@ -7,3 +7,7 @@
 2026-10-13T22:50:00Z T1 red: `python3 -m unittest evals.tests.test_grading` failed with one import error because `evals.grading` did not exist.
 2026-10-13T22:59:57Z T1 green: 3 tests passed; offline CLI evaluated 1/1 golden fixture scenario and wrote Markdown and JSON reports under `/tmp/frontline-evals-t1`.
 2026-10-13T23:00:00Z T1 done: design, scenario, golden and known-bad traces, grader, report, CLI, and tests delivered. Known gap: fixture replay validates the harness, not live-model or audio quality.
+2026-10-13T23:25:00Z T2 started: user selected importlib loading with an in-memory `src` stub and AST schema extraction; no production refactor. Model protocol and pass^k move into T2.
+2026-10-13T23:27:00Z T2 red: focused unittest failed with one import error because `evals.conversation` did not exist.
+2026-10-13T23:34:00Z T2 green: 3 focused tests passed; production prompts and five Room 1 schemas loaded without project dependencies, scripted conversation completed four fake tools and the real prompt swap, and pass^k matched hand calculations.
+2026-10-13T23:35:00Z T2 done: all 6 eval tests passed; T1 fixture report remained compatible at 1/1. No production code or external service was touched.

@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "id": "conversation_agreement_happy_path",
+  "org_name": "KCH",
+  "caller_turns": [
+    "My MC is 123456.",
+    "Yes, that's us. The reference is LOAD-100.",
+    "Sixteen fifty works. I'm Alex, use this number."
+  ],
+  "fixtures": {
+    "carrier": {
+      "mc_number": "123456",
+      "carrier_name": "Example Transport"
+    },
+    "load": {
+      "id": "LOAD-100",
+      "load_id": "LOAD-100",
+      "origin": {"city": "Chicago", "state": "IL"},
+      "destination": {"city": "Dallas", "state": "TX"},
+      "pickupTime": "October 14th, 2026 at 9 AM",
+      "dropoffTime": "October 15th, 2026 at 5 PM",
+      "equipment": "Dry Van",
+      "commodity": "Packaged goods",
+      "specialInstructions": "Driver must call before arrival",
+      "trackerRequired": true,
+      "startRate": 1500,
+      "bookNowRate": 1650,
+      "maxRate": 1800,
+      "transfer_call_to": "+15550100100",
+      "transfer_country_code": "+1"
+    }
+  },
+  "script": [
+    {
+      "expect_system_contains": ["can I get your MC number?", "MANDATORY TOOL-CALL RULE"],
+      "expect_tools": ["verify_carrier", "get_load_context", "record_agreement", "end_call", "transfer_to_human"],
+      "text": "Let me check that.",
+      "tool_calls": [
+        {"id": "verify-1", "name": "verify_carrier", "args": {"mc_number": "123456"}}
+      ]
+    },
+    {
+      "expect_last_tool_result": {"status": "success", "carrier_name": "Example Transport"},
+      "text": "Is this Example Transport?"
+    },
+    {
+      "expect_system_contains": ["verify the carrier BEFORE asking about the reference number"],
+      "text": "One moment.",
+      "tool_calls": [
+        {"id": "load-1", "name": "get_load_context", "args": {"load_id": "LOAD-100"}}
+      ]
+    },
+    {
+      "expect_system_contains": ["CONFIDENTIAL PRICING", "Internal Ceiling", "CLOSING SEQUENCE"],
+      "expect_last_tool_result": {"status": "success"},
+      "text": "I've got LOAD-100 from Chicago to Dallas. This lane is going for fifteen hundred."
+    },
+    {
+      "expect_system_contains": ["NEVER EXCEED", "record_agreement function"],
+      "text": "Great, sixteen fifty works. Let me save that.",
+      "tool_calls": [
+        {
+          "id": "record-1",
+          "name": "record_agreement",
+          "args": {
+            "agreed_price": 1650,
+            "carrier_contact_name": "Alex",
+            "carrier_contact_phone": ""
+          }
+        }
+      ]
+    },
+    {
+      "expect_last_tool_result": {"status": "success", "negotiation_id": "fake-negotiation-1"},
+      "text": "Perfect, I'll get the confirmation sent over.",
+      "tool_calls": [
+        {"id": "end-1", "name": "end_call", "args": {"reason": "agreement"}}
+      ]
+    },
+    {
+      "expect_last_tool_result": {"status": "success", "reason": "agreement"},
+      "text": "Thanks, have a good one."
+    }
+  ]
+}
