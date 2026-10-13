@@ -9,7 +9,9 @@ from evals.runner import run_suite
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run Frontline offline evaluations")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    run_parser = subparsers.add_parser("run", help="grade reviewed fixture traces")
+    run_parser = subparsers.add_parser(
+        "run", help="run and grade deterministic scripted conversations"
+    )
     run_parser.add_argument(
         "--output",
         type=Path,
@@ -23,7 +25,7 @@ def main() -> int:
         report = run_suite(evals_dir, args.output)
         summary = report["summary"]
         print(
-            f"offline fixture evaluation: {summary['passed']}/"
+            f"offline scripted evaluation: {summary['passed']}/"
             f"{summary['scenarios']} scenarios passed"
         )
         print(f"reports: {args.output / 'report.md'} and {args.output / 'report.json'}")
@@ -34,4 +36,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

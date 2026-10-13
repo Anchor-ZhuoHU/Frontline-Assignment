@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from evals.contracts import ProductionContracts
+from evals.conversation import ScriptedModel, run_conversation
 from evals.grading import grade_trace, load_json
 
 
@@ -13,8 +15,9 @@ def _markdown(report: dict[str, Any]) -> str:
     lines = [
         "# Frontline offline evaluation report",
         "",
-        "> Evidence source: reviewed fixture replay. This validates the evaluation",
-        "> harness and expected outcomes, not current live-model or audio quality.",
+        "> Evidence source: deterministic scripted conversations using the production",
+        "> prompt builders and tool schemas with in-memory fake tools. This does not",
+        "> measure current live-model or audio quality.",
         "",
         f"- Generated: {report['generated_at']}",
         f"- Runner level: {report['runner_level']}",
@@ -51,16 +54,19 @@ def _markdown(report: dict[str, Any]) -> str:
 
 def run_suite(evals_dir: Path, output_dir: Path) -> dict[str, Any]:
     scenarios = []
-    for scenario_path in sorted((evals_dir / "scenarios").glob("*.json")):
+    contracts = ProductionContracts.load(evals_dir.parent)
+    for scenario_path in sorted(
+        (evals_dir / "conversation_scenarios").glob("*.json")
+    ):
         scenario = load_json(scenario_path)
-        trace_path = evals_dir / scenario["fixture_trace"]
-        scenarios.append(grade_trace(scenario, load_json(trace_path)))
+        trace = run_conversation(scenario, ScriptedModel(scenario["script"]), contracts)
+        scenarios.append(grade_trace(scenario, trace))
 
     passed = sum(result["passed"] for result in scenarios)
     report = {
         "schema_version": 1,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "runner_level": "offline_fixture_replay",
+        "runner_level": "text_conversation",
         "summary": {
             "scenarios": len(scenarios),
             "passed": passed,
@@ -81,4 +87,3 @@ def run_suite(evals_dir: Path, output_dir: Path) -> dict[str, Any]:
     )
     (output_dir / "report.md").write_text(_markdown(report), encoding="utf-8")
     return report
-

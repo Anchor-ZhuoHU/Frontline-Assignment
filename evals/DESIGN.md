@@ -39,6 +39,8 @@ Readable JSON scenarios provide caller turns, in-memory carrier and load fixture
 
 Each runner-produced trace is an ordered event log containing caller text, agent text, tool calls/results, system-prompt transitions, and fake end state. Pure graders return pass, fail, not-applicable, or error with event-level evidence. The report stage aggregates results into `report.json` for automation and `report.md` for review.
 
+Runner failures are data: prompt-contract mismatches, unknown tools, exhausted scripts, and model-step-limit violations become a critical `runner.completed` failure with the exception and attempted tool call in the trace. Successful `end_call` and `transfer_to_human` results stop the loop before another caller turn. Scenarios default to 20 model steps and may set a lower cap.
+
 The first grader implements a subset argument check for `record_agreement`. Its golden fixture passes; a copy with only the agreed price corrupted fails and displays the observed value. The conversation skeleton now executes carrier verification, load retrieval, the real prompt transition, agreement recording, and call closure through the same event interface. Further checks reuse this interface rather than compare exact assistant wording.
 
 Run the current skeleton with:

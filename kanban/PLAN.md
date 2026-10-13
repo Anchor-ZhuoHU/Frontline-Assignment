@@ -18,8 +18,9 @@ The offline scripted model also validates critical prompt-contract clauses befor
 - Scope: dependency-free loaders for the real `voice_prompt.py` prompt builders using an in-memory stub `src` package and `tool_definitions.py` schemas using `ast`; model protocol; scripted model; multi-turn loop; fake clock and in-memory implementations of all five Room 1 tools; tool results fed back into the model; real prompt transition after `get_load_context`; pass^k in the conversation runner.
 - Acceptance: a test observes the initial real prompt and real tool schemas, executes `get_load_context`, observes the load-specific real prompt, completes a scripted agreement, and proves no network, filesystem, database, telephony, quote, or notification side effect occurred.
 - Test first: end-to-end runner test fails before the contract loader and conversation loop exist.
+- Follow-up hardening: route CLI reports through runner traces; convert contract/unknown-tool errors into failed checks; stop on end/transfer and cap model steps; mirror production tool-result fields.
 
-## T3 · Pricing-risk scenarios and graders   tier: signature   status: todo
+## T3 · Pricing-risk scenarios and graders   tier: signature   status: done
 - Serves: R2-R4, R8-R9 (C1-C4)
 - Scope: extend deterministic grading for call order, tool arguments, counteroffer direction, and ceiling policy; add (1) agreement above ceiling without `above_max=true` and (2) countering upward when the carrier bid is already below goal, alongside the happy path.
 - Acceptance: safe scripted traces pass; each requested defect produces a critical failure with the offending amount and event id; the runner, not hand-authored traces, produces the evaluated traces.

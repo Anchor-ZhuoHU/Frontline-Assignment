@@ -94,6 +94,7 @@ class FakeTools:
             self.state["verified_carrier"] = copy.deepcopy(carrier)
             return {
                 "status": "success",
+                "message": f"Carrier found: {carrier['carrier_name']}",
                 "carrier_name": carrier["carrier_name"],
                 "mc_number": carrier["mc_number"],
             }, None
@@ -103,20 +104,44 @@ class FakeTools:
                 return {"status": "error", "message": "load not found"}, None
             self.state["loaded_reference"] = load["id"]
             prompt = self._contracts.negotiation_prompt(copy.deepcopy(load))
-            return {"status": "success", "load_data": copy.deepcopy(load)}, prompt
+            return {
+                "status": "success",
+                "message": f"Load {load['id']} information retrieved successfully",
+                "load_data": copy.deepcopy(load),
+                "call_id": "fake-call-1",
+            }, prompt
         if name == "record_agreement":
             if self.state["loaded_reference"] is None:
                 return {"status": "error", "message": "load not loaded"}, None
             self.state["agreement"] = copy.deepcopy(args)
-            return {"status": "success", "negotiation_id": "fake-negotiation-1"}, None
+            above_max = args.get("above_max", False)
+            message = (
+                f"Above-max bid stored. We'll contact {args.get('carrier_contact_name')} if conditions change."
+                if above_max
+                else f"Agreement recorded at ${float(args['agreed_price'])}"
+            )
+            return {
+                "status": "success",
+                "message": message,
+                "negotiation_id": "fake-negotiation-1",
+            }, None
         if name == "end_call":
             self.state["end_reason"] = args.get("reason")
-            return {"status": "success", "reason": args.get("reason")}, None
+            return {
+                "status": "success",
+                "message": f"Call ending with reason: {args.get('reason')}",
+            }, None
         if name == "transfer_to_human":
             if self.state["loaded_reference"] is None:
                 return {"status": "error", "message": "load not loaded"}, None
             self.state["transfer"] = copy.deepcopy(args)
-            return {"status": "transferring"}, None
+            return {
+                "status": "transferring",
+                "message": (
+                    "Tell the carrier you are placing them on a brief hold while you "
+                    "connect them with the appropriate person. Be warm and professional."
+                ),
+            }, None
         raise ValueError(f"unknown fake tool: {name}")
 
 
@@ -132,58 +157,80 @@ def run_conversation(
     fake_tools = FakeTools(scenario, contracts)
     next_t_ms = 0
     call_number = 0
+    model_steps = 0
+    max_model_steps = scenario.get("limits", {}).get("max_model_steps", 20)
+    terminated_by: str | None = None
+    runner_error: str | None = None
 
     def event(event_type: str, **data: Any) -> None:
         nonlocal next_t_ms
         events.append({"t_ms": next_t_ms, "type": event_type, **data})
         next_t_ms += 100
 
-    for caller_text in scenario["caller_turns"]:
-        messages.append({"role": "user", "content": caller_text})
-        event("user_transcript", text=caller_text)
-
-        while True:
-            response = model.complete(copy.deepcopy(messages), contracts.room1_tools)
-            text = response.get("text", "")
-            calls = response.get("tool_calls", [])
-            assistant_message: dict[str, Any] = {"role": "assistant", "content": text}
-            if calls:
-                assistant_message["tool_calls"] = copy.deepcopy(calls)
-            messages.append(assistant_message)
-            if text:
-                event("agent_text", text=text)
-            if not calls:
+    try:
+        for caller_text in scenario["caller_turns"]:
+            if terminated_by is not None:
                 break
+            messages.append({"role": "user", "content": caller_text})
+            event("user_transcript", text=caller_text)
 
-            for call in calls:
-                name = call["name"]
-                args = call.get("args", {})
-                if name not in tool_names:
-                    raise ValueError(f"model called tool absent from production schemas: {name}")
-                call_number += 1
-                call_id = call.get("id", f"call-{call_number}")
-                event("tool_call", id=call_id, name=name, args=copy.deepcopy(args))
-                result, replacement_prompt = fake_tools.call(name, args)
-                if replacement_prompt is not None:
-                    messages[0] = {"role": "system", "content": replacement_prompt}
-                    event("system_prompt_changed", prompt=replacement_prompt)
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": call_id,
-                        "name": name,
-                        "content": json.dumps(result, sort_keys=True),
-                    }
-                )
-                event(
-                    "tool_result",
-                    id=call_id,
-                    name=name,
-                    output=copy.deepcopy(result),
-                )
+            while terminated_by is None:
+                if model_steps >= max_model_steps:
+                    raise RuntimeError(
+                        f"model step limit exceeded: {model_steps}/{max_model_steps}"
+                    )
+                model_steps += 1
+                response = model.complete(copy.deepcopy(messages), contracts.room1_tools)
+                text = response.get("text", "")
+                calls = response.get("tool_calls", [])
+                assistant_message: dict[str, Any] = {"role": "assistant", "content": text}
+                if calls:
+                    assistant_message["tool_calls"] = copy.deepcopy(calls)
+                messages.append(assistant_message)
+                if text:
+                    event("agent_text", text=text)
+                if not calls:
+                    break
 
-    if isinstance(model, ScriptedModel):
-        model.assert_consumed()
+                for call in calls:
+                    name = call["name"]
+                    args = call.get("args", {})
+                    call_number += 1
+                    call_id = call.get("id", f"call-{call_number}")
+                    event("tool_call", id=call_id, name=name, args=copy.deepcopy(args))
+                    if name not in tool_names:
+                        raise ValueError(
+                            f"model called tool absent from production schemas: {name}"
+                        )
+                    result, replacement_prompt = fake_tools.call(name, args)
+                    if replacement_prompt is not None:
+                        messages[0] = {"role": "system", "content": replacement_prompt}
+                        event("system_prompt_changed", prompt=replacement_prompt)
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call_id,
+                            "name": name,
+                            "content": json.dumps(result, sort_keys=True),
+                        }
+                    )
+                    event(
+                        "tool_result",
+                        id=call_id,
+                        name=name,
+                        output=copy.deepcopy(result),
+                    )
+                    if name in {"end_call", "transfer_to_human"} and result.get(
+                        "status"
+                    ) in {"success", "transferring"}:
+                        terminated_by = name
+                        break
+
+        if isinstance(model, ScriptedModel):
+            model.assert_consumed()
+    except Exception as exc:
+        runner_error = f"{type(exc).__name__}: {exc}"
+        event("runner_error", detail=runner_error)
     return {
         "schema_version": 1,
         "scenario_id": scenario["id"],
@@ -192,6 +239,10 @@ def run_conversation(
             "model": model.model_id,
             "production_prompt_loaded": True,
             "production_tool_schemas_loaded": True,
+            "status": "error" if runner_error else "completed",
+            "model_steps": model_steps,
+            "max_model_steps": max_model_steps,
+            "terminated_by": terminated_by,
         },
         "events": events,
         "end_state": fake_tools.state,
@@ -211,4 +262,3 @@ def pass_hat_k(runs_by_scenario: dict[str, list[bool]], k: int) -> float:
         successes = sum(runs)
         scores.append(comb(successes, k) / comb(n, k))
     return sum(scores) / len(scores)
-

@@ -11,3 +11,8 @@
 2026-10-13T23:27:00Z T2 red: focused unittest failed with one import error because `evals.conversation` did not exist.
 2026-10-13T23:34:00Z T2 green: 3 focused tests passed; production prompts and five Room 1 schemas loaded without project dependencies, scripted conversation completed four fake tools and the real prompt swap, and pass^k matched hand calculations.
 2026-10-13T23:35:00Z T2 done: all 6 eval tests passed; T1 fixture report remained compatible at 1/1. No production code or external service was touched.
+2026-10-13T23:31:00Z T2 hardening and T3 started after review: report runner traces, contain scenario errors, add terminal/step limits, align fake results, then grade ceiling and below-goal counter risks from generated traces.
+2026-10-13T23:34:00Z T2 hardening green: 8 focused tests passed for prompt/unknown-tool containment, 20-step default cap, terminal behavior, production-shaped results, and runner-report integration.
+2026-10-13T23:35:00Z T3 red: 4 pricing tests failed because the two conversation scenarios did not exist.
+2026-10-13T23:37:00Z T3 sensitivity green: safe above-ceiling and below-goal traces passed; mutated runner traces failed with 1900 vs 1800 ceiling evidence and 1500 vs 1400 counter evidence.
+2026-10-13T23:38:00Z T3 done: 15/15 eval tests pass; CLI ran 3 runner-produced scenarios, 3/3 passed, with reports in `/tmp/frontline-evals-t3-final`.

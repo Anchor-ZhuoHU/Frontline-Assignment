@@ -76,10 +76,6 @@
       "tool_calls": [
         {"id": "end-1", "name": "end_call", "args": {"reason": "agreement"}}
       ]
-    },
-    {
-      "expect_last_tool_result": {"status": "success", "reason": "agreement"},
-      "text": "Thanks, have a good one."
     }
   ]
 }
