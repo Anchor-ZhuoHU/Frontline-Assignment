@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import tempfile
 import unittest
@@ -38,6 +39,33 @@ class AgreementGraderTest(unittest.TestCase):
         self.assertFalse(result["passed"])
         check = next(c for c in result["checks"] if c["check_id"] == "agreement.correct_price")
         self.assertEqual(check["status"], "fail")
+        self.assertIn("1700", check["evidence"])
+
+    def test_bad_first_write_is_not_hidden_by_later_correct_write(self) -> None:
+        trace = load_json(EVALS_DIR / "traces" / "agreement_happy_path.json")
+        trace = copy.deepcopy(trace)
+        correct_index = next(
+            index
+            for index, event in enumerate(trace["events"])
+            if event.get("type") == "tool_call"
+            and event.get("name") == "record_agreement"
+        )
+        trace["events"].insert(
+            correct_index,
+            {
+                "t_ms": 250,
+                "type": "tool_call",
+                "id": "record-bad-first",
+                "name": "record_agreement",
+                "args": {"agreed_price": 1700},
+            },
+        )
+
+        result = grade_trace(self.scenario, trace)
+
+        self.assertFalse(result["passed"])
+        check = next(c for c in result["checks"] if c["check_id"] == "agreement.correct_price")
+        self.assertIn("record-bad-first", check["evidence"])
         self.assertIn("1700", check["evidence"])
 
     def test_suite_writes_human_and_machine_reports(self) -> None:

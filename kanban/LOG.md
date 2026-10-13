@@ -16,3 +16,5 @@
 2026-10-13T23:35:00Z T3 red: 4 pricing tests failed because the two conversation scenarios did not exist.
 2026-10-13T23:37:00Z T3 sensitivity green: safe above-ceiling and below-goal traces passed; mutated runner traces failed with 1900 vs 1800 ceiling evidence and 1500 vs 1400 counter evidence.
 2026-10-13T23:38:00Z T3 done: 15/15 eval tests pass; CLI ran 3 runner-produced scenarios, 3/3 passed, with reports in `/tmp/frontline-evals-t3-final`.
+2026-10-13T23:37:00Z grader review red: bad-first-write, spoken amount, last-mentioned amount, and happy-path coverage regressions failed as expected (5 failures, 1 missing-coverage error).
+2026-10-13T23:39:37Z grader review green: every agreement write is checked, ordered freight-aware spoken amounts are parsed, the last amount is graded, and the happy path has price and ceiling checks. 23/23 tests and 3/3 scripted scenarios pass.

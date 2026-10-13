@@ -30,6 +30,22 @@
       "transfer_country_code": "+1"
     }
   },
+  "expected": {
+    "checks": [
+      {
+        "id": "agreement.correct_price",
+        "type": "tool_called",
+        "name": "record_agreement",
+        "args": {"agreed_price": 1650},
+        "severity": "critical"
+      },
+      {
+        "id": "agreement.ceiling_policy",
+        "type": "agreement_policy",
+        "severity": "critical"
+      }
+    ]
+  },
   "script": [
     {
       "expect_system_contains": ["can I get your MC number?", "MANDATORY TOOL-CALL RULE"],

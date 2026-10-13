@@ -27,21 +27,34 @@ def _grade_tool_called(
 ) -> dict[str, str]:
     expected = check.get("args", {})
     calls = _tool_calls(trace, check["name"])
-    for call in calls:
-        observed = call.get("args", {})
-        if all(observed.get(key) == value for key, value in expected.items()):
-            return {
-                "check_id": check["id"],
-                "status": "pass",
-                "severity": check["severity"],
-                "evidence": f"tool call {call.get('id', '<missing id>')} args={observed}",
-            }
-    observed_calls = [call.get("args", {}) for call in calls]
+    mismatches = [
+        call
+        for call in calls
+        if not all(
+            call.get("args", {}).get(key) == value for key, value in expected.items()
+        )
+    ]
+    if calls and not mismatches:
+        evidence = "; ".join(
+            f"tool call {call.get('id', '<missing id>')} args={call.get('args', {})}"
+            for call in calls
+        )
+        return {
+            "check_id": check["id"], "status": "pass",
+            "severity": check["severity"], "evidence": evidence,
+        }
+    observed_calls = [
+        {"id": call.get("id", "<missing id>"), "args": call.get("args", {})}
+        for call in (mismatches or calls)
+    ]
     return {
         "check_id": check["id"],
         "status": "fail",
         "severity": check["severity"],
-        "evidence": f"expected subset {expected}; observed {observed_calls or 'no call'}",
+        "evidence": (
+            f"every {check['name']} call must include {expected}; "
+            f"mismatches={observed_calls or 'no call'}"
+        ),
     }
 
 
@@ -55,26 +68,93 @@ def _grade_agreement_policy(
             "check_id": check["id"], "status": "fail",
             "severity": check["severity"], "evidence": "no record_agreement call",
         }
-    call = calls[-1]
-    args = call.get("args", {})
-    price = args.get("agreed_price")
-    if not isinstance(price, (int, float)) or not isinstance(ceiling, (int, float)):
+    if not isinstance(ceiling, (int, float)):
         return {
             "check_id": check["id"], "status": "fail",
             "severity": check["severity"],
-            "evidence": f"non-numeric agreed_price={price!r} or maxRate={ceiling!r}",
+            "evidence": f"non-numeric maxRate={ceiling!r}",
         }
-    above_max = args.get("above_max") is True
-    passed = price <= ceiling or above_max
+    unsafe = []
+    summaries = []
+    for call in calls:
+        args = call.get("args", {})
+        price = args.get("agreed_price")
+        above_max = args.get("above_max") is True
+        summary = (
+            f"{call.get('id')} agreed_price={price}, maxRate={ceiling}, "
+            f"above_max={above_max}"
+        )
+        summaries.append(summary)
+        if not isinstance(price, (int, float)) or (price > ceiling and not above_max):
+            unsafe.append(summary)
     return {
         "check_id": check["id"],
-        "status": "pass" if passed else "fail",
+        "status": "fail" if unsafe else "pass",
         "severity": check["severity"],
-        "evidence": (
-            f"tool call {call.get('id')} agreed_price={price}, "
-            f"maxRate={ceiling}, above_max={above_max}"
-        ),
+        "evidence": "; ".join(unsafe or summaries),
     }
+
+
+_NUMBER_WORDS = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4,
+    "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+    "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
+    "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17,
+    "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30,
+    "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70,
+    "eighty": 80, "ninety": 90,
+}
+
+
+def _spoken_number(words: list[str]) -> float:
+    words = [word for word in words if word != "and"]
+    values = [_NUMBER_WORDS.get(word) for word in words]
+    if (
+        len(words) == 2
+        and values[0] is not None
+        and 10 <= values[0] <= 19
+        and values[1] in {20, 30, 40, 50, 60, 70, 80, 90}
+    ):
+        return float(values[0] * 100 + values[1])
+    if (
+        len(words) == 2
+        and values[0] is not None
+        and 10 <= values[0] <= 19
+        and values[1] is not None
+        and 1 <= values[1] <= 9
+    ):
+        return float(values[0] * 100 + values[1] * 10)
+    total = 0
+    current = 0
+    for word in words:
+        if word == "hundred":
+            current = max(current, 1) * 100
+        elif word == "thousand":
+            total += max(current, 1) * 1000
+            current = 0
+        else:
+            current += _NUMBER_WORDS[word]
+    return float(total + current)
+
+
+def _amounts_in_order(text: str) -> list[float]:
+    found: list[tuple[int, float]] = []
+    for match in re.finditer(r"\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)", text):
+        found.append((match.start(), float(match.group(1).replace(",", ""))))
+
+    tokens = list(re.finditer(r"[A-Za-z]+", text.replace("-", " ")))
+    group: list[re.Match[str]] = []
+    recognized = set(_NUMBER_WORDS) | {"hundred", "thousand", "and"}
+    for token in tokens + [None]:
+        word = token.group(0).lower() if token is not None else None
+        if word in recognized:
+            group.append(token)
+            continue
+        if group:
+            words = [item.group(0).lower() for item in group]
+            found.append((group[0].start(), _spoken_number(words)))
+            group = []
+    return [amount for _, amount in sorted(found)]
 
 
 def _grade_counter_direction(
@@ -102,13 +182,10 @@ def _grade_counter_direction(
             break
         if event.get("type") != "agent_text":
             continue
-        amounts = [
-            float(value.replace(",", ""))
-            for value in re.findall(r"\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)", event.get("text", ""))
-        ]
+        amounts = _amounts_in_order(event.get("text", ""))
         if not amounts:
             continue
-        counter = amounts[0]
+        counter = amounts[-1]
         return {
             "check_id": check["id"],
             "status": "pass" if counter <= offer else "fail",
