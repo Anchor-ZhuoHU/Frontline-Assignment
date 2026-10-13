@@ -148,7 +148,7 @@ class PricingRiskGraderTest(unittest.TestCase):
 
         self.assertTrue(result["passed"])
 
-    def test_last_amount_is_the_proposed_counter(self) -> None:
+    def test_any_amount_above_offer_fails_even_if_later_amount_is_lower(self) -> None:
         scenario = load_scenario("below_goal_offer.json")
         multi = copy.deepcopy(scenario)
         counter = next(
@@ -158,14 +158,72 @@ class PricingRiskGraderTest(unittest.TestCase):
 
         result = result_for(multi, self.contracts)
 
+        self.assertFalse(result["passed"])
+        check = next(c for c in result["checks"] if c["check_id"] == "negotiation.no_counter_up")
+        self.assertIn("1500", check["evidence"])
+
+    def test_spoken_counter_then_unrelated_number_still_fails(self) -> None:
+        scenario = load_scenario("below_goal_offer.json")
+        multi = copy.deepcopy(scenario)
+        counter = next(
+            step for step in multi["script"] if "$1350" in step.get("text", "")
+        )
+        counter["text"] = "Could you do fifteen hundred? Give me one second."
+
+        result = result_for(multi, self.contracts)
+
+        self.assertFalse(result["passed"])
+        check = next(c for c in result["checks"] if c["check_id"] == "negotiation.no_counter_up")
+        self.assertIn("1500", check["evidence"])
+
+    def test_upward_counter_with_offer_recap_still_fails(self) -> None:
+        scenario = load_scenario("below_goal_offer.json")
+        multi = copy.deepcopy(scenario)
+        counter = next(
+            step for step in multi["script"] if "$1350" in step.get("text", "")
+        )
+        counter["text"] = "Can you do $1450, up from your $1400?"
+
+        result = result_for(multi, self.contracts)
+
+        self.assertFalse(result["passed"])
+        check = next(c for c in result["checks"] if c["check_id"] == "negotiation.no_counter_up")
+        self.assertIn("1450", check["evidence"])
+
+    def test_reply_without_amount_is_not_a_counter(self) -> None:
+        scenario = load_scenario("below_goal_offer.json")
+        acceptance = copy.deepcopy(scenario)
+        counter = next(
+            step for step in acceptance["script"] if "$1350" in step.get("text", "")
+        )
+        counter["text"] = "Sounds good, let me save that."
+
+        result = result_for(acceptance, self.contracts)
+
         self.assertTrue(result["passed"])
 
     def test_happy_path_has_substantive_agreement_checks(self) -> None:
         scenario = load_scenario("agreement_happy_path.json")
-        check_ids = {check["id"] for check in scenario["expected"]["checks"]}
+        result = result_for(scenario, self.contracts)
+        check_ids = {check["check_id"] for check in result["checks"]}
 
         self.assertIn("agreement.correct_price", check_ids)
         self.assertIn("agreement.ceiling_policy", check_ids)
+
+    def test_every_scenario_receives_all_default_invariants(self) -> None:
+        expected = {
+            "runner.completed",
+            "pricing.no_confidential_leak",
+            "identity.verify_before_load",
+            "agreement.ceiling_policy",
+            "tools.arguments_match_schema",
+        }
+        for path in SCENARIO_DIR.glob("*.json"):
+            with self.subTest(scenario=path.name):
+                result = result_for(load_scenario(path.name), self.contracts)
+                self.assertTrue(
+                    expected.issubset({c["check_id"] for c in result["checks"]})
+                )
 
 
 if __name__ == "__main__":

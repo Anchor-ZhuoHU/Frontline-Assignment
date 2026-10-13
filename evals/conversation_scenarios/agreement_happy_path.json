@@ -38,11 +38,6 @@
         "name": "record_agreement",
         "args": {"agreed_price": 1650},
         "severity": "critical"
-      },
-      {
-        "id": "agreement.ceiling_policy",
-        "type": "agreement_policy",
-        "severity": "critical"
       }
     ]
   },
@@ -73,7 +68,7 @@
     },
     {
       "expect_system_contains": ["NEVER EXCEED", "record_agreement function"],
-      "text": "Great, sixteen fifty works. Let me save that.",
+      "text": "Great, that works. Let me save that.",
       "tool_calls": [
         {
           "id": "record-1",

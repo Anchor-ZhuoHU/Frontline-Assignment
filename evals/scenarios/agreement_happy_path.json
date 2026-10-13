@@ -5,6 +5,9 @@
   "description": "A verified carrier accepts a load at 1650 and the agreement is persisted.",
   "tags": ["agreement", "price_integrity", "walking_skeleton"],
   "fixture_trace": "traces/agreement_happy_path.json",
+  "fixtures": {
+    "load": {"bookNowRate": 1650, "maxRate": 1800}
+  },
   "expected": {
     "checks": [
       {

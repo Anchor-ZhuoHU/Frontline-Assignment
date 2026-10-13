@@ -113,6 +113,8 @@ class FakeTools:
         if name == "record_agreement":
             if self.state["loaded_reference"] is None:
                 return {"status": "error", "message": "load not loaded"}, None
+            if fixtures.get("tool_failures", {}).get("record_agreement"):
+                return {"status": "error", "message": "Failed to record in database"}, None
             self.state["agreement"] = copy.deepcopy(args)
             above_max = args.get("above_max", False)
             message = (
@@ -234,6 +236,7 @@ def run_conversation(
     return {
         "schema_version": 1,
         "scenario_id": scenario["id"],
+        "tool_schemas": copy.deepcopy(contracts.room1_tools),
         "meta": {
             "runner_level": "text_conversation",
             "model": model.model_id,

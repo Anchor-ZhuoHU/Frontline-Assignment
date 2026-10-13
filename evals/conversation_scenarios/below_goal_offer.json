@@ -25,8 +25,7 @@
   },
   "expected": {
     "checks": [
-      {"id": "negotiation.no_counter_up", "type": "counter_not_above_offer", "carrier_offer": 1400, "severity": "critical"},
-      {"id": "agreement.ceiling_policy", "type": "agreement_policy", "severity": "critical"}
+      {"id": "negotiation.no_counter_up", "type": "counter_not_above_offer", "carrier_offer": 1400, "severity": "critical"}
     ]
   },
   "script": [

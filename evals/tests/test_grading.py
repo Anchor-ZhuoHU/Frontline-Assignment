@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from evals.contracts import ProductionContracts
 from evals.grading import grade_trace, load_json
 from evals.runner import run_suite
 
@@ -18,11 +19,17 @@ class AgreementGraderTest(unittest.TestCase):
         self.scenario = load_json(
             EVALS_DIR / "scenarios" / "agreement_happy_path.json"
         )
+        self.contracts = ProductionContracts.load(EVALS_DIR.parent)
+
+    def grade_fixture(self, trace: dict) -> dict:
+        trace = copy.deepcopy(trace)
+        trace["tool_schemas"] = self.contracts.room1_tools
+        return grade_trace(self.scenario, trace)
 
     def test_golden_trace_passes_with_tool_call_evidence(self) -> None:
         trace = load_json(EVALS_DIR / "traces" / "agreement_happy_path.json")
 
-        result = grade_trace(self.scenario, trace)
+        result = self.grade_fixture(trace)
 
         self.assertTrue(result["passed"])
         check = next(c for c in result["checks"] if c["check_id"] == "agreement.correct_price")
@@ -34,7 +41,7 @@ class AgreementGraderTest(unittest.TestCase):
             EVALS_DIR / "traces" / "known_bad" / "agreement_wrong_price.json"
         )
 
-        result = grade_trace(self.scenario, trace)
+        result = self.grade_fixture(trace)
 
         self.assertFalse(result["passed"])
         check = next(c for c in result["checks"] if c["check_id"] == "agreement.correct_price")
@@ -61,7 +68,7 @@ class AgreementGraderTest(unittest.TestCase):
             },
         )
 
-        result = grade_trace(self.scenario, trace)
+        result = self.grade_fixture(trace)
 
         self.assertFalse(result["passed"])
         check = next(c for c in result["checks"] if c["check_id"] == "agreement.correct_price")
@@ -72,8 +79,8 @@ class AgreementGraderTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             report = run_suite(EVALS_DIR, Path(tmp))
 
-            self.assertEqual(report["summary"]["scenarios"], 3)
-            self.assertEqual(report["summary"]["passed"], 3)
+            self.assertEqual(report["summary"]["scenarios"], 5)
+            self.assertEqual(report["summary"]["passed"], 5)
             self.assertTrue((Path(tmp) / "report.json").is_file())
             markdown = (Path(tmp) / "report.md").read_text(encoding="utf-8")
             self.assertIn("agreement_happy_path", markdown)

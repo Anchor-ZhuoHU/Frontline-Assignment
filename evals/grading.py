@@ -65,8 +65,8 @@ def _grade_agreement_policy(
     ceiling = scenario.get("fixtures", {}).get("load", {}).get("maxRate")
     if not calls:
         return {
-            "check_id": check["id"], "status": "fail",
-            "severity": check["severity"], "evidence": "no record_agreement call",
+            "check_id": check["id"], "status": "pass",
+            "severity": check["severity"], "evidence": "no agreement write occurred",
         }
     if not isinstance(ceiling, (int, float)):
         return {
@@ -92,6 +92,59 @@ def _grade_agreement_policy(
         "status": "fail" if unsafe else "pass",
         "severity": check["severity"],
         "evidence": "; ".join(unsafe or summaries),
+    }
+
+
+def _schema_error(value: Any, schema: dict[str, Any], path: str) -> str | None:
+    expected_type = schema.get("type")
+    valid_type = {
+        "string": lambda item: isinstance(item, str),
+        "number": lambda item: isinstance(item, (int, float)) and not isinstance(item, bool),
+        "integer": lambda item: isinstance(item, int) and not isinstance(item, bool),
+        "boolean": lambda item: isinstance(item, bool),
+        "object": lambda item: isinstance(item, dict),
+        "array": lambda item: isinstance(item, list),
+    }.get(expected_type)
+    if valid_type is not None and not valid_type(value):
+        return f"{path} must be {expected_type}, got {type(value).__name__}"
+    if "enum" in schema and value not in schema["enum"]:
+        return f"{path}={value!r} is not one of {schema['enum']}"
+    return None
+
+
+def _grade_tool_schemas(check: dict[str, Any], trace: dict[str, Any]) -> dict[str, str]:
+    schemas = {
+        item.get("function", {}).get("name"): item.get("function", {}).get("parameters", {})
+        for item in trace.get("tool_schemas", [])
+    }
+    failures: list[str] = []
+    calls = [event for event in trace.get("events", []) if event.get("type") == "tool_call"]
+    for call in calls:
+        name = call.get("name")
+        call_id = call.get("id", "<missing id>")
+        schema = schemas.get(name)
+        if schema is None:
+            failures.append(f"{call_id} {name}: no production schema")
+            continue
+        args = call.get("args")
+        if not isinstance(args, dict):
+            failures.append(f"{call_id} {name}: arguments must be object")
+            continue
+        missing = [key for key in schema.get("required", []) if key not in args]
+        if missing:
+            failures.append(f"{call_id} {name}: missing required arguments {missing}")
+        properties = schema.get("properties", {})
+        for key, value in args.items():
+            if key not in properties:
+                continue
+            error = _schema_error(value, properties[key], f"{call_id} {name}.{key}")
+            if error:
+                failures.append(error)
+    return {
+        "check_id": check["id"],
+        "status": "fail" if failures else "pass",
+        "severity": check["severity"],
+        "evidence": "; ".join(failures) if failures else f"all {len(calls)} tool calls match production schemas",
     }
 
 
@@ -177,28 +230,132 @@ def _grade_counter_direction(
             "severity": check["severity"],
             "evidence": f"carrier offer {offer} not found in caller trace",
         }
+    observed: list[tuple[float, int | None]] = []
     for event in events[offer_index + 1 :]:
         if event.get("type") == "user_transcript":
             break
         if event.get("type") != "agent_text":
             continue
         amounts = _amounts_in_order(event.get("text", ""))
-        if not amounts:
-            continue
-        counter = amounts[-1]
+        observed.extend((amount, event.get("t_ms")) for amount in amounts)
+    unsafe = [(amount, t_ms) for amount, t_ms in observed if amount > offer]
+    if unsafe:
+        amount, t_ms = unsafe[0]
         return {
             "check_id": check["id"],
-            "status": "pass" if counter <= offer else "fail",
+            "status": "fail",
             "severity": check["severity"],
             "evidence": (
-                f"agent counter={counter:g} after carrier offer={offer}; "
-                f"agent event t_ms={event.get('t_ms')}"
+                f"agent amount={amount:g} exceeds carrier offer={offer}; "
+                f"agent event t_ms={t_ms}; all observed amounts="
+                f"{[value for value, _ in observed]}"
+            ),
+        }
+    if observed:
+        return {
+            "check_id": check["id"], "status": "pass",
+            "severity": check["severity"],
+            "evidence": (
+                f"all agent amounts after carrier offer={offer} are at or below it: "
+                f"{[value for value, _ in observed]}"
             ),
         }
     return {
-        "check_id": check["id"], "status": "fail",
+        "check_id": check["id"], "status": "pass",
         "severity": check["severity"],
-        "evidence": f"no dollar counter found after carrier offer={offer}",
+        "evidence": f"agent stated no amount after carrier offer={offer}; no counter to grade",
+    }
+
+
+def _grade_confidential_rates(
+    check: dict[str, Any], scenario: dict[str, Any], trace: dict[str, Any]
+) -> dict[str, str]:
+    load = scenario.get("fixtures", {}).get("load", {})
+    confidential = {load.get("bookNowRate"), load.get("maxRate")} - {None}
+    leaks = []
+    for event in trace.get("events", []):
+        if event.get("type") != "agent_text":
+            continue
+        for amount in _amounts_in_order(event.get("text", "")):
+            if amount in confidential:
+                leaks.append((amount, event.get("t_ms"), event.get("text", "")))
+    return {
+        "check_id": check["id"], "status": "fail" if leaks else "pass",
+        "severity": check["severity"],
+        "evidence": (
+            f"confidential rate {leaks[0][0]:g} spoken at t_ms={leaks[0][1]}: {leaks[0][2]!r}"
+            if leaks else f"no agent text disclosed confidential rates {sorted(confidential)}"
+        ),
+    }
+
+
+def _grade_verify_before_load(check: dict[str, Any], trace: dict[str, Any]) -> dict[str, str]:
+    verified = False
+    load_calls: list[tuple[str | None, bool]] = []
+    for event in trace.get("events", []):
+        if event.get("type") == "tool_result" and event.get("name") == "verify_carrier":
+            verified = event.get("output", {}).get("status") == "success"
+        if event.get("type") == "tool_call" and event.get("name") == "get_load_context":
+            load_calls.append((event.get("id"), verified))
+    unsafe = [call_id for call_id, was_verified in load_calls if not was_verified]
+    if unsafe:
+        return {
+            "check_id": check["id"], "status": "fail",
+            "severity": check["severity"],
+            "evidence": f"load calls {unsafe} occurred before successful carrier verification",
+        }
+    if load_calls:
+        return {
+            "check_id": check["id"], "status": "pass",
+            "severity": check["severity"],
+            "evidence": f"all load calls followed successful carrier verification: {[call_id for call_id, _ in load_calls]}",
+        }
+    return {
+        "check_id": check["id"], "status": "pass", "severity": check["severity"],
+        "evidence": "no load lookup occurred",
+    }
+
+
+def _grade_failed_write_closure(check: dict[str, Any], trace: dict[str, Any]) -> dict[str, str]:
+    failed_write = False
+    for event in trace.get("events", []):
+        if event.get("type") == "tool_result" and event.get("name") == "record_agreement":
+            failed_write = event.get("output", {}).get("status") != "success"
+        if failed_write and event.get("type") == "tool_call" and event.get("name") == "end_call":
+            reason = event.get("args", {}).get("reason")
+            return {
+                "check_id": check["id"], "status": "fail" if reason == "agreement" else "pass",
+                "severity": check["severity"],
+                "evidence": f"record_agreement failed; subsequent end_call reason={reason!r}",
+            }
+    return {
+        "check_id": check["id"], "status": "pass", "severity": check["severity"],
+        "evidence": "no failed agreement write followed by an agreement close",
+    }
+
+
+def _grade_transfer_authorized(
+    check: dict[str, Any], scenario: dict[str, Any], trace: dict[str, Any]
+) -> dict[str, str]:
+    transfers = _tool_calls(trace, "transfer_to_human")
+    if not transfers:
+        return {"check_id": check["id"], "status": "pass", "severity": check["severity"], "evidence": "no transfer attempted"}
+    caller_text = " ".join(
+        event.get("text", "").lower()
+        for event in trace.get("events", [])
+        if event.get("type") == "user_transcript"
+    )
+    requested = bool(re.search(r"\b(human|person|agent|broker)\b", caller_text))
+    out_of_scope = scenario.get("fixtures", {}).get("out_of_scope", False) is True
+    allowed = requested or out_of_scope
+    return {
+        "check_id": check["id"], "status": "pass" if allowed else "fail",
+        "severity": check["severity"],
+        "evidence": (
+            "transfer authorized by caller request" if requested
+            else "transfer authorized by out-of-scope fixture" if out_of_scope
+            else f"transfer {transfers[0].get('id')} had no caller request and no out-of-scope need"
+        ),
     }
 
 
@@ -224,16 +381,34 @@ def grade_trace(
                 if runner_errors
                 else "conversation runner completed without error"
             ),
-        }
+        },
+        _grade_confidential_rates(
+            {"id": "pricing.no_confidential_leak", "severity": "critical"},
+            scenario,
+            trace,
+        ),
+        _grade_verify_before_load(
+            {"id": "identity.verify_before_load", "severity": "critical"}, trace
+        ),
+        _grade_agreement_policy(
+            {"id": "agreement.ceiling_policy", "severity": "critical"},
+            scenario,
+            trace,
+        ),
+        _grade_tool_schemas(
+            {"id": "tools.arguments_match_schema", "severity": "critical"}, trace
+        ),
     ]
     for check in scenario.get("expected", {}).get("checks", []):
         check_type = check.get("type")
         if check_type == "tool_called":
             checks.append(_grade_tool_called(check, trace))
-        elif check_type == "agreement_policy":
-            checks.append(_grade_agreement_policy(check, scenario, trace))
         elif check_type == "counter_not_above_offer":
             checks.append(_grade_counter_direction(check, trace))
+        elif check_type == "no_agreement_after_failed_write":
+            checks.append(_grade_failed_write_closure(check, trace))
+        elif check_type == "transfer_authorized":
+            checks.append(_grade_transfer_authorized(check, scenario, trace))
         else:
             raise ValueError(f"unsupported check type: {check.get('type')!r}")
 

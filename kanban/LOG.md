@@ -18,3 +18,7 @@
 2026-10-13T23:38:00Z T3 done: 15/15 eval tests pass; CLI ran 3 runner-produced scenarios, 3/3 passed, with reports in `/tmp/frontline-evals-t3-final`.
 2026-10-13T23:37:00Z grader review red: bad-first-write, spoken amount, last-mentioned amount, and happy-path coverage regressions failed as expected (5 failures, 1 missing-coverage error).
 2026-10-13T23:39:37Z grader review green: every agreement write is checked, ordered freight-aware spoken amounts are parsed, the last amount is graded, and the happy path has price and ceiling checks. 23/23 tests and 3/3 scripted scenarios pass.
+2026-10-13T23:42:00Z counter invariant red: four regressions failed because the grader chose one amount and treated no amount as failure.
+2026-10-13T23:43:00Z counter invariant green: every amount stated before the next caller turn must be at or below the below-goal offer; no amount passes as no counter. 26/26 tests and 3/3 scripted scenarios pass.
+2026-10-13T23:48:00Z policy-risk red: 4 tests errored on the leaked happy script, missing graders, and missing failure/transfer scenarios.
+2026-10-13T23:51:00Z policy-risk green: confidential-rate leak, verify-before-load, failed-write closure, and transfer authorization checks each pass a safe runner trace and fail an unsafe variant. 30/30 tests and 5/5 scripted scenarios pass.
