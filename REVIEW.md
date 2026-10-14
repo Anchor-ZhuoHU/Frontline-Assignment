@@ -9,15 +9,15 @@
 
 This PR replaces Daily ingress, rooms, and transport with signed LiveKit webhooks and Telnyx-backed SIP participants. Its warm transfer is intended to pause the Room1 negotiation pipeline, play hold audio, brief a broker privately in Room2, move the broker into Room1, and retain a silent observer until either human leaves.
 
-The design is thoughtful about answer gating, move reconciliation, and several transfer races, but the implementation is not ready to merge. Caller audio is not actually gated during hold or after handoff, every broker connection is rejected because a participant SID is used to query an identity-keyed map, normal agent-ended calls do not disconnect the SIP caller, and the migration removes the only working path without a cutover or rollback mechanism.
+The design is thoughtful about answer gating, move reconciliation, and several transfer races, but the implementation is not ready to merge. Production webhook events reject every real SIP participant before bot startup, caller audio is not actually gated during hold or after handoff, every broker connection is rejected because a participant SID is used to query an identity-keyed map, and normal agent-ended calls do not disconnect the SIP caller.
 
 ## Verdict
 
-**Request changes.** The warm-transfer path cannot complete, its intended privacy boundary does not stop carrier speech from reaching the model and transcript, and the provider replacement cannot be safely staged or rolled back.
+**Request changes.** Real inbound calls cannot start, the warm-transfer path cannot complete, its intended privacy boundary does not stop carrier speech from reaching the model and transcript, and the provider replacement cannot be safely staged or rolled back.
 
 | Severity | Findings | Must-fix |
 | --- | ---: | ---: |
-| Critical | 3 | 3 |
+| Critical | 4 | 4 |
 | High | 3 | 3 |
 | Medium | 1 | 0 |
 | Low | 0 | 0 |
@@ -30,16 +30,27 @@ The design is thoughtful about answer gating, move reconciliation, and several t
 | PR `f93f7a5` | `SUPABASE_URL=http://test-suite.local SUPABASE_SERVICE_ROLE_KEY=test-key python3 -m pytest ../shared/tests -v --tb=short` | Blocked before collection: `/usr/bin/python3: No module named pytest`; no dependencies were installed without approval. |
 | PR `f93f7a5` | `python3 -m pytest tests -v --tb=short` | Blocked before collection by the same missing `pytest`; no pass count is claimed. |
 | PR `f93f7a5` | `python3 -m compileall -q voice-agent shared scripts` | Passed, exit 0. |
+| SDK source | `python3 -m zipfile -l /tmp/livekit_protocol-1.1.27-py3-none-any.whl \| rg 'livekit/protocol/(models\|models_pb2\|webhook)'` | Exit 0: the wheel lists `models.py`, `models.pyi`, `webhook.py`, and `webhook.pyi`; it contains no `models_pb2` module. |
 
 Base and head test counts and installed-library probes are unavailable because the requested isolated environment could not be created. No suite was rerun and no SDK reproduction script was run after the setup failure.
 
-I also compared the PR fakes with the actual Pipecat 0.0.95 and LiveKit RTC source. `LiveKitInputTransport` inherits `BaseInputTransport`, which in turn inherits the `FrameProcessor` methods `pause_processing_frames()` and `resume_processing_frames()`. Those methods pause only frames traversing that processor's internal input/process queues. LiveKit audio instead enters through `push_audio_frame()` and `BaseInputTransport`'s separate audio task, which calls `push_frame()` directly and is controlled by the transport `_paused` state, not the frame-processor queue pause. Pipecat's participant callbacks pass SIDs, while LiveKit RTC's `Room.remote_participants` map is keyed by identity. Pipecat's default pipeline idle timeout is 300 seconds; passing `None` disables its idle observer. Sources: [Pipecat 0.0.95 frame processor](https://github.com/pipecat-ai/pipecat/blob/v0.0.95/src/pipecat/processors/frame_processor.py), [LiveKit transport](https://github.com/pipecat-ai/pipecat/blob/v0.0.95/src/pipecat/transports/livekit/transport.py), [base input transport](https://github.com/pipecat-ai/pipecat/blob/v0.0.95/src/pipecat/transports/base_input.py), [LiveKit RTC room API](https://docs.livekit.io/reference/python/livekit/rtc/room.html), and [pipeline task](https://github.com/pipecat-ai/pipecat/blob/v0.0.95/src/pipecat/pipeline/task.py).
+I also compared the PR fakes with the actual Pipecat 0.0.95 and LiveKit SDK source. `WebhookReceiver.receive()` returns a protobuf `WebhookEvent`; in `livekit-protocol` 1.1.27, `ParticipantInfo.kind` is an integer-backed enum and the wheel contains `livekit/protocol/models.py`, not `models_pb2.py`. `LiveKitInputTransport` inherits `BaseInputTransport`, which in turn inherits the `FrameProcessor` methods `pause_processing_frames()` and `resume_processing_frames()`. Those methods pause only frames traversing that processor's internal input/process queues. LiveKit audio instead enters through `push_audio_frame()` and `BaseInputTransport`'s separate audio task, which calls `push_frame()` directly and is controlled by the transport `_paused` state, not the frame-processor queue pause. Pipecat's participant callbacks pass SIDs, while LiveKit RTC's `Room.remote_participants` map is keyed by identity. Pipecat's default pipeline idle timeout is 300 seconds; passing `None` disables its idle observer. Sources: [LiveKit webhook receiver](https://github.com/livekit/python-sdks/blob/main/livekit-api/livekit/api/webhook.py), [LiveKit protocol models](https://github.com/livekit/python-sdks/blob/main/livekit-protocol/livekit/protocol/models.py), [Pipecat 0.0.95 frame processor](https://github.com/pipecat-ai/pipecat/blob/v0.0.95/src/pipecat/processors/frame_processor.py), [LiveKit transport](https://github.com/pipecat-ai/pipecat/blob/v0.0.95/src/pipecat/transports/livekit/transport.py), [base input transport](https://github.com/pipecat-ai/pipecat/blob/v0.0.95/src/pipecat/transports/base_input.py), [LiveKit RTC room API](https://docs.livekit.io/reference/python/livekit/rtc/room.html), and [pipeline task](https://github.com/pipecat-ai/pipecat/blob/v0.0.95/src/pipecat/pipeline/task.py).
 
 ## Findings
 
 ### Critical
 
-#### F1. Hold and handoff do not stop carrier audio from reaching STT, the LLM, tools, or the saved transcript
+#### F1. Every real inbound SIP webhook is rejected before the bot starts
+
+- Severity: Critical
+- Label: must-fix
+- Location: `voice-agent/livekit_ingress.py:195`, `voice-agent/tests/test_livekit_ingress.py:31`
+- Scenario: LiveKit sends a signed `participant_joined` webhook for an inbound SIP caller. The production `WebhookReceiver.receive()` returns a protobuf `WebhookEvent`, so `participant.kind` is the integer enum value `3`. `_participant_is_sip()` derives the string `"3"`, fails its name checks, then its fallback import raises `ImportError`; the helper returns `False`. The ingress rejects the valid event with HTTP 422 `NOT_SIP_PARTICIPANT`, and no bot starts for any real inbound call.
+- Cause: The helper assumes the protobuf enum value exposes a `.name` or stringifies to an enum name. It then imports `ParticipantInfo` from `livekit.protocol.models_pb2`, but the resolved `livekit-protocol` 1.1.27 wheel ships `livekit/protocol/models.py` and no `models_pb2.py`. The unit fake sets `kind="SIP"`, a representation the real protobuf does not return, so it bypasses the broken fallback.
+- Fix: Import the generated model from the supported package surface, for example `from livekit.protocol.models import ParticipantInfo`, and compare the numeric value with `ParticipantInfo.SIP` (or use `ParticipantInfo.Kind.Name(value)`). Pin the exact LiveKit API/protocol versions so this production boundary is reproducible.
+- Test: Build a real `livekit.protocol.webhook.WebhookEvent` with `participant.kind = ParticipantInfo.SIP`, pass it through `parse_verified_sip_event()`, and assert it is accepted. Also assert `STANDARD` is rejected. Do not represent protobuf enums as strings in the fake.
+
+#### F2. Hold and handoff do not stop carrier audio from reaching STT, the LLM, tools, or the saved transcript
 
 - Severity: Critical
 - Label: must-fix
@@ -49,17 +60,17 @@ I also compared the PR fakes with the actual Pipecat 0.0.95 and LiveKit RTC sour
 - Fix: Put an explicit input gate before STT (or use a transport operation that demonstrably gates `push_audio_frame`/the audio task) and keep it closed throughout consultation and human-only handoff. Disable Room1 model/tool processing while gated, guard `end_call` for every non-bot-active state, and ensure the post-handoff observer is isolated from conversation media. Define explicitly whether held speech is discarded rather than replayed on resume.
 - Test: With the pinned Pipecat input implementation, send carrier audio before hold, during `TRANSFER_HOLD`, after a failed-transfer resume, and after `HUMAN_ONLY` handoff. Assert only the permitted frames reach STT, LLM/tool dispatch, and transcript persistence; also assert an `end_call` attempt during hold cannot terminate the call.
 
-#### F2. Room2 rejects the real broker because it looks up a SID in an identity-keyed map
+#### F3. Room2 rejects the real broker because it looks up a SID in an identity-keyed map
 
 - Severity: Critical
 - Label: must-fix
 - Location: `voice-agent/room2_pipeline_service.py:246`, `voice-agent/tests/test_room2_pipeline_service.py:10`
 - Scenario: The broker answers and Pipecat emits participant/audio events with the broker SID. `track_human()` cannot recover the broker identity, compares `None` with the expected identity, and returns `False`. `_broker_connected` and `_broker_media_ready` are never both established, so `wait_for_broker()` times out and transfer cleanup drops the answered broker. This makes every normally configured warm transfer fail before handoff.
-- Cause: line 254 calls `remote_participants.get(participant_id)`, but Pipecat's callbacks supply `participant.sid` and LiveKit RTC documents and implements `remote_participants` as a map keyed by participant identity. Pipecat 0.0.95's `get_participant_metadata(participant_id)` makes the same SID-as-key lookup and therefore does not rescue the identity. The unit fake hides both mismatches by constructing `remote_participants={"PA_broker": participant}`—keyed by SID—and omitting a `sid` attribute, unlike the real SDK.
+- Cause: line 254 calls `remote_participants.get(participant_id)`, but Pipecat's callbacks supply `participant.sid` and LiveKit RTC documents and implements `remote_participants` as a map keyed by participant identity. Pipecat 0.0.95's `get_participant_metadata(participant_id)` makes the same SID-as-key lookup and therefore does not rescue the identity. The unit fake hides both mismatches by constructing `remote_participants={"PA_broker": participant}`, keyed by SID, and omitting a `sid` attribute, unlike the real SDK.
 - Fix: Resolve the callback SID by searching the real participant values for a matching `participant.sid` (or retain an explicit SID-to-identity mapping from the SDK participant event), then compare the resolved identity with the dialed identity. Avoid reaching through `_client` where possible; encapsulate the Pipecat-version workaround in one adapter.
 - Test: Make the fake match LiveKit: key the map by `broker-expected`, set `participant.identity="broker-expected"` and `participant.sid="PA_broker"`, and emit `PA_broker`. Assert connected/media-ready are set only for that pair, then cover an unexpected SID and unexpected identity. Add an adapter test against the pinned SDK mapping contract.
 
-#### F3. `end_call` leaves the SIP caller connected to an empty room
+#### F4. `end_call` leaves the SIP caller connected to an empty room
 
 - Severity: Critical
 - Label: must-fix
@@ -71,17 +82,17 @@ I also compared the PR fakes with the actual Pipecat 0.0.95 and LiveKit RTC sour
 
 ### High
 
-#### F4. The migration removes the 300-second idle fail-safe
+#### F5. The migration removes the 300-second idle fail-safe
 
 - Severity: High
 - Label: must-fix
 - Location: `voice-agent/bot.py:363`
 - Scenario: A carrier goes silent, the media connection stalls without a participant-disconnected event, or the LLM stops producing turns. On base, `PipelineTask` uses Pipecat 0.0.95's 300-second default and cancels an idle pipeline. The PR passes `idle_timeout_secs=None`, so the task, SIP participant, recording, and single-call runner slot can remain active indefinitely.
-- Cause: The explicit `None` disables the idle monitor. There is no replacement call-duration timer, SIP `max_call_duration`, or pipeline idle handler. This also amplifies F3 because there is no server-side backstop for an abandoned call.
-- Fix: Preserve a bounded idle timeout, make it configurable with a safe default, and on timeout play any required closing prompt before using the same idempotent Room1 termination from F3. Also set a provider-side maximum call duration as a final guard.
+- Cause: The explicit `None` disables the idle monitor. There is no replacement call-duration timer, SIP `max_call_duration`, or pipeline idle handler. This also amplifies F4 because there is no server-side backstop for an abandoned call.
+- Fix: Preserve a bounded idle timeout, make it configurable with a safe default, and on timeout play any required closing prompt before using the same idempotent Room1 termination from F4. Also set a provider-side maximum call duration as a final guard.
 - Test: Use a short configured timeout and no `BotSpeakingFrame` or `UserSpeakingFrame`; assert the pipeline ends, recording and call record finalize, Room1 is deleted, and the bot-runner slot becomes available.
 
-#### F5. There is no safe cutover or rollback path after deleting Daily
+#### F6. There is no safe cutover or rollback path after deleting Daily
 
 - Severity: High
 - Label: must-fix
@@ -91,7 +102,7 @@ I also compared the PR fakes with the actual Pipecat 0.0.95 and LiveKit RTC sour
 - Fix: Keep both provider paths temporarily behind one call-start routing decision that is stored on the call record. Roll out by test number or tenant, preserve the Daily webhook until all old calls and provider retries have drained, label metrics by provider, and document the order for provisioning, traffic shift, validation, rollback, and eventual Daily removal. If a dual runtime is intentionally impossible, split removal into a later PR and provide an operational maintenance-window plan with tested revert steps.
 - Test: Add routing tests for Daily-selected and LiveKit-selected calls, including a flag flip during an active call and a late Daily completion after new calls have moved to LiveKit. Each event must stay on the provider recorded at call start.
 
-#### F6. The new logs can emit caller phone numbers as participant identities
+#### F7. The new logs can emit caller phone numbers as participant identities
 
 - Severity: High
 - Label: must-fix
@@ -103,7 +114,7 @@ I also compared the PR fakes with the actual Pipecat 0.0.95 and LiveKit RTC sour
 
 ### Medium
 
-#### F7. Webhook deduplication is racy and process-local
+#### F8. Webhook deduplication is racy and process-local
 
 - Severity: Medium
 - Label: suggestion
@@ -117,14 +128,14 @@ I also compared the PR fakes with the actual Pipecat 0.0.95 and LiveKit RTC sour
 
 | Behavior | Daily base | LiveKit PR | Assessment |
 | --- | --- | --- | --- |
-| Call start | Daily waits for both `on_dialin_connected` and the real participant before recording, call creation, and `LLMRunFrame`. | Signed `participant_joined` ingress starts the bot; Pipecat also detects participants already in the room and matches the supplied SID/identity. | Substantially preserved, subject to real-service qualification. |
+| Call start | Daily waits for both `on_dialin_connected` and the real participant before recording, call creation, and `LLMRunFrame`. | A real protobuf SIP kind is rejected with 422 before the bot runner is called. | Broken, F1. |
 | Caller hangs up | Matching Daily client disconnect stops recording and cancels the task. | Matching LiveKit participant disconnect stops recording, handles transfer cancellation if active, and cancels the task. | Preserved in code. |
-| Agent ends call | Ending the Daily pipeline also ends the bot-owned phone room. | `EndFrame` disconnects only the bot and does not delete Room1 or remove SIP. | Broken, F3. |
-| Idle timeout | Pipecat default: 300 seconds. | Explicitly disabled with `None`; no provider maximum replaces it. | Regression, F4. |
+| Agent ends call | Ending the Daily pipeline also ends the bot-owned phone room. | `EndFrame` disconnects only the bot and does not delete Room1 or remove SIP. | Broken, F4. |
+| Idle timeout | Pipecat default: 300 seconds. | Explicitly disabled with `None`; no provider maximum replaces it. | Regression, F5. |
 
 ## What the broker hears and what is recorded
 
-The intended Room2 boundary is correct in shape: the broker is dialed into Room2, and the Room2 LLM starts only after both `wait_until_answered` returns and broker audio is subscribed. In practice F2 prevents that opening from starting. Independently, F1 means the carrier remains audible to the Room1 STT/LLM while held and after handoff; suppressing TTS does not prevent hidden inference, tool calls, or transcript capture. Thus the implementation does not provide the stated private consultation/human-only boundary.
+The intended Room2 boundary is correct in shape: the broker is dialed into Room2, and the Room2 LLM starts only after both `wait_until_answered` returns and broker audio is subscribed. In practice F3 prevents that opening from starting. Independently, F2 means the carrier remains audible to the Room1 STT/LLM while held and after handoff; suppressing TTS does not prevent hidden inference, tool calls, or transcript capture. Thus the implementation does not provide the stated private consultation/human-only boundary.
 
 If participant recognition is fixed, the Room2 prompt briefs from the entire carrier conversation, including transfer reason, load number, offered prices, and internal pricing, and instructs the model to share all context with the broker. The broker consultation is recorded separately and appended to the call transcript with a `[BROKER CONSULTATION]` prefix.
 
@@ -134,14 +145,14 @@ This remains unqualified against a real call. `wait_until_answered` treats voice
 
 | ID | Requirement | Status | Evidence |
 | --- | --- | --- | --- |
-| R1 | Migrate webhook, rooms, Pipecat transport, and outbound dialing from Daily to LiveKit/Telnyx. | Partly met | New boundaries exist, but normal termination and idle lifecycle are not equivalent (F3, F4). |
+| R1 | Migrate webhook, rooms, Pipecat transport, and outbound dialing from Daily to LiveKit/Telnyx. | Not met | Real inbound LiveKit SIP events are rejected before startup, and normal termination and idle lifecycle are not equivalent (F1, F4, F5). |
 | R2 | Preserve the single-prompt negotiation architecture. | Met | Room1 retains one context and existing tool handlers in `voice-agent/bot.py`. |
-| R3 | Keep the carrier connected and privately brief the broker before handoff. | Not met | The carrier audio is not gated from the Room1 model/transcript (F1), and the real broker is rejected before briefing because SID and identity are confused (F2). |
+| R3 | Keep the carrier connected and privately brief the broker before handoff. | Not met | The carrier audio is not gated from the Room1 model/transcript (F2), and the real broker is rejected before briefing because SID and identity are confused (F3). |
 | R4 | Distinguish answer from early media and verify participant movement before success. | Met in code, not integration-tested | Answer plus subscribed-audio gates and destination reconciliation are present; declared tests could not run locally. |
-| R5 | Clean both rooms across success, failure, disconnect, timeout, and competing callbacks. | Partly met | Transfer cleanup is extensive, but normal-call rooms are omitted and webhook idempotency is racy (F3, F7). |
+| R5 | Clean both rooms across success, failure, disconnect, timeout, and competing callbacks. | Partly met | Transfer cleanup is extensive, but normal-call rooms are omitted and webhook idempotency is racy (F4, F8). |
 | R6 | Record transfer only after broker arrival; preserve transcript and consultation recording references. | Met in code, not integration-tested | `HANDOFF_COMPLETE` follows verified movement; audit data is appended during finalization. |
 | R7 | Isolate Slack failure and attribute records by provider. | Met in code | Notification exceptions are isolated; schema and dashboard add provider fields. |
-| R8 | Provide merge-ready evidence and operational safety for a real-time calling migration. | Not met | Tests were not runnable in this environment, the media-gate and Room2 participant fakes do not model the pinned libraries' behavior, and no cutover/rollback exists. |
+| R8 | Provide merge-ready evidence and operational safety for a real-time calling migration. | Not met | Tests were not runnable in this environment, ingress, media-gate, and Room2 participant fakes do not model the resolved libraries' behavior, and no cutover/rollback exists. |
 
 ## Questions for the author
 
