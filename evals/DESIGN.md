@@ -4,9 +4,9 @@
 
 This evaluation supports a merge decision for changes to the single-prompt freight negotiation agent. The default command must be deterministic, require no credentials, make no network calls, and have no production side effects.
 
-The runner drives a pluggable model through a multi-turn conversation using the real prompt builders and tool schemas. All tools are in-memory fakes. A successful `get_load_context` replaces the initial system message with the real load-specific negotiation prompt, matching production. The scripted model makes CI deterministic and asserts that safety-critical prompt clauses and tool results reach the model. Reviewed traces remain grader fixtures, while runner-produced traces are the behavioral evaluation input.
+The runner drives a pluggable model through a multi-turn conversation using the real prompt builders and tool schemas. All tools are in-memory fakes. A successful `get_load_context` replaces the initial system message with the real load-specific negotiation prompt, matching production. The scripted model supplies deterministic responses for CI; runner-produced traces are the behavioral evaluation input. Prompt-clause enforcement belongs to a default grader, not the scripted model.
 
-A scripted model cannot measure nondeterministic model behavior or reliably predict the effect of arbitrary prompt wording changes. It can exercise the complete loop and enforce explicit prompt contracts. Repeated live runs are the behavioral measurement and should remain non-gating until the team defines a flake policy.
+A scripted model cannot measure nondeterministic model behavior or reliably predict the effect of arbitrary prompt wording changes. It can exercise the complete loop, while the prompt registry checks explicit contracts on the rendered prompts. Repeated live runs are the behavioral measurement and should remain non-gating until the team defines a flake policy.
 
 Scripted caller turns are fixed independently of the agent's actual response. A live agent can therefore ask a question, recover from an error, or take a branch that makes the next scripted caller turn unnatural or inconsistent. Live traces must be reviewed for this drift; pass^k does not make the caller simulator adaptive.
 
@@ -55,12 +55,10 @@ Every default invariant applies to every scenario. Scenario-specific checks add 
 
 ## Measurement and gate policy
 
-- Task completion: scenarios whose critical and major checks all pass, always reported as a count and rate.
-- Policy compliance: calls with no critical confidentiality, identity, or grounding violation.
-- Transfer correctness: expected versus observed transfers, separated from containment.
-- Field capture: normalized expected values compared with tool arguments and fake end state.
-- Reliability: live or simulated nondeterministic scenarios must use repeated runs and report pass^k. Fixture replay is deterministic and must not be presented as pass^k.
-- Critical checks require 100 percent. With a small initial dataset, a percentage is never presented without its numerator and denominator.
+- Scripted completion is the number of scenarios whose critical and major checks all pass, reported as passed and failed counts.
+- Live reliability uses repeated runs and reports pass^1 and pass^k over behavioral runs. Infrastructure-error runs are counted separately and excluded from those calculations.
+- Deterministic fixture/script replay is not presented as pass^k.
+- Critical checks require 100 percent passage in the scripted gate.
 
 ### Flake policy
 
@@ -68,7 +66,7 @@ Every default invariant applies to every scenario. Scenario-specific checks add 
 - Prompt/schema loading, runner completion, tool argument schemas, identity ordering, pricing confidentiality and ceilings, pre-load grounding, expected transfer behavior, and scenario-specific closure/counter checks are gating in the scripted suite.
 - Live GPT-4.1 runs are report-only. Reports include all attempts, errors, requested model settings, returned model ids and system fingerprints, plus pass^1 and pass^k; failed live checks do not fail the deterministic merge gate.
 - Do not retry only failed live samples. Rerun the complete declared sample set and retain both reports. Promotion to gating requires a product-approved run count, pass^k threshold, retry budget, cost owner, and baseline owner.
-- Transport/authentication failures make that live evidence set invalid rather than converting it into a model-policy failure. The report must still retain the error trace.
+- Rate-limit and server failures are retried with bounded backoff. An exhausted retry budget or another transport/authentication failure is recorded as an infrastructure-error trace, excluded from pass^k, and counted in the report. If a scenario has fewer than `k` behavioral runs left, its pass^k is reported as unavailable rather than as a model failure.
 
 ## Architecture
 
@@ -78,35 +76,36 @@ Identity grading assumes a successful `verify_carrier` result unless a scenario 
 
 Every scenario declares `expected.transfer` as `true` or `false`. Transfer grading compares that declaration with observed `transfer_to_human` calls instead of trying to infer intent from caller wording; this detects both unwanted and missed transfers. Rate-leak grading recognizes standalone digits as well as currency and spoken amounts, while counter-direction grading intentionally limits amounts to currency-marked or spoken rates so dates and ZIP codes do not look like counters.
 
-Each runner-produced trace is an ordered event log containing caller text, agent text, tool calls/results, system-prompt transitions, and fake end state. Pure graders return pass, fail, not-applicable, or error with event-level evidence. The report stage aggregates results into `report.json` for automation and `report.md` for review.
+Each runner-produced trace is an ordered event log containing caller text, agent text, tool calls/results, system-prompt transitions, and fake end state. Pure graders return `pass` or `fail` with event-level evidence. The report stage aggregates results into `report.json` for automation and `report.md` for review.
 
 Every report records the checked-out Git commit, canonical SHA-256 of the production tool schemas, SHA-256 of each scenario's rendered initial and negotiation prompts, model sampling settings, and runs per scenario. The output bundle saves deterministic traces as `traces/<scenario>.json` and live traces as `traces/<scenario>.run-<n>.json`. These hashes identify the evaluated contracts even when the working tree is not clean.
 
-Runner failures are data: prompt-contract mismatches, unknown tools, exhausted scripts, and model-step-limit violations become a critical `runner.completed` failure with the exception and attempted tool call in the trace. Successful `end_call` and `transfer_to_human` results stop the loop before another caller turn. Scenarios default to 20 model steps and may set a lower cap.
+Runner failures are data: unknown tools, exhausted scripted responses, and model-step-limit violations become a critical `runner.completed` failure with the exception and attempted tool call in the trace. Prompt-contract mismatches are ordinary `prompt.critical_clauses` grader failures. Successful `end_call` and `transfer_to_human` results stop the loop before another caller turn. Scenarios default to 20 model steps and may set a lower cap.
 
 Critical prompt contracts live in one evaluator registry. Each clause declares whether it applies to the initial or negotiation prompt and names the behavioral check it protects. The default `prompt.critical_clauses` invariant evaluates every rendered prompt; scenario scripts do not assert prompt fragments. Mutation tests remove each registered clause in turn and require a critical failure. The registry intentionally excludes the phone-identity replacement clauses already covered by `voice-agent/tests/test_voice_prompt_guardrails.py`.
 
-The first grader implements a subset argument check for `record_agreement`. Its golden fixture passes; a copy with only the agreed price corrupted fails and displays the observed value. The conversation skeleton now executes carrier verification, load retrieval, the real prompt transition, agreement recording, and call closure through the same event interface. Further checks reuse this interface rather than compare exact assistant wording.
+The suite currently contains six end-to-end scripted scenarios covering successful agreement, above-ceiling bidding, below-goal negotiation, agreement-write failure, carrier-verification retries, and requested transfer. Default invariants grade every scenario; scenario-specific checks add the expected outcome. Unit tests inject load-lookup failure and mutate prompts, traces, tool arguments, and model behavior to prove the fakes and graders respond to their target defects.
 
-Run the current skeleton with:
+Run the full evaluator tests and offline gate with:
 
 ```bash
-python3 -m unittest evals.tests.test_grading
+python3 -m unittest discover -s evals/tests -v
 python3 -m evals run
 ```
 
-By default reports go to `/tmp/frontline-evals`, keeping routine output out of the repository. A reviewed baseline report will be added deliberately once scenario breadth and thresholds are complete.
+By default reports and saved traces go to `/tmp/frontline-evals`, keeping generated evidence out of the repository. Use `--output PATH` to retain a named evidence bundle.
 
 ## External boundaries and safety
 
-The production pipeline initializes Daily, Deepgram, OpenAI, Cartesia, Supabase, Highway or the legacy carrier API, the KCH quote API, and Slack. The default evaluator initializes none of them. Future real-prompt runs must replace every state-changing tool with an in-memory fake and cap turns, duration, and repetitions. Live-model runs remain separate from the credential-free merge gate.
+The production pipeline initializes Daily, Deepgram, OpenAI, Cartesia, Supabase, Highway or the legacy carrier API, the KCH quote API, and Slack. The default evaluator initializes none of them. Opt-in live-model runs call only OpenAI; they still use in-memory fake tools and capped model steps and repetitions. Live-model results remain separate from the credential-free merge gate.
 
 ## Production code gaps found while building the evaluator
 
 ### Code-confirmed
 
 - `record_agreement` validates that a load is present, converts the price, and requires contact details for `above_max`, but it does not compare `agreed_price` with the loaded `maxRate`. Ceiling enforcement currently depends on the prompt and evaluator; the persistence boundary can store an over-ceiling row without `above_max=true`.
-- `get_load_context` validates the reference shape and tenant-scoped load lookup, but it does not require a preceding successful `verify_carrier` result or an explicit phone-identity confirmation. Identity-before-load authorization currently depends on the prompt and evaluator.
+- `get_load_context` does not require a preceding successful `verify_carrier` result or an explicit phone-identity confirmation. Identity-before-load authorization currently depends on the prompt and evaluator.
+- `get_load_context` passes `org_id` to `NegotiationDBService.get_load_by_reference`, and its comment describes multi-tenant isolation, but `get_load_by_reference` explicitly ignores `org_id` and delegates to an unscoped reference lookup because the current load schema has no tenant ownership field. A reference collision can therefore cross the isolation boundary implied by the call site.
 
 These are observations, not production changes: this assessment keeps the existing single-prompt architecture and production behavior intact.
 
