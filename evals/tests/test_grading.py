@@ -85,6 +85,8 @@ class AgreementGraderTest(unittest.TestCase):
             markdown = (Path(tmp) / "report.md").read_text(encoding="utf-8")
             self.assertIn("agreement_happy_path", markdown)
             self.assertIn("scripted conversations", markdown.lower())
+            self.assertIn("Live run: no", markdown)
+            self.assertIn("no live model request was made", markdown)
             persisted = json.loads(
                 (Path(tmp) / "report.json").read_text(encoding="utf-8")
             )

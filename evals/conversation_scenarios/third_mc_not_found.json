@@ -23,9 +23,7 @@
     "checks": [
       {
         "id": "closing.third_mc_not_found",
-        "type": "tool_called",
-        "name": "end_call",
-        "args": {"reason": "mc_not_found"},
+        "type": "third_not_found_close",
         "severity": "critical"
       }
     ]

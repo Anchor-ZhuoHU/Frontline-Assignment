@@ -417,6 +417,49 @@ def _grade_failed_write_closure(check: dict[str, Any], trace: dict[str, Any]) ->
     }
 
 
+def _grade_third_not_found_close(
+    check: dict[str, Any], trace: dict[str, Any]
+) -> dict[str, str]:
+    events = trace.get("events", [])
+    closes = [
+        (index, event)
+        for index, event in enumerate(events)
+        if event.get("type") == "tool_call"
+        and event.get("name") == "end_call"
+        and event.get("args", {}).get("reason") == "mc_not_found"
+    ]
+    if not closes:
+        return {
+            "check_id": check["id"], "status": "fail",
+            "severity": check["severity"],
+            "evidence": "no end_call(reason='mc_not_found') observed",
+        }
+    close_index, close = closes[0]
+    misses = [
+        (index, event)
+        for index, event in enumerate(events[:close_index])
+        if event.get("type") == "tool_result"
+        and event.get("name") == "verify_carrier"
+        and event.get("output", {}).get("status") == "not_found"
+    ]
+    caller_between = bool(misses) and any(
+        event.get("type") == "user_transcript"
+        for event in events[misses[-1][0] + 1 : close_index]
+    )
+    safe = len(misses) == 3 and not caller_between
+    return {
+        "check_id": check["id"], "status": "pass" if safe else "fail",
+        "severity": check["severity"],
+        "evidence": (
+            f"end call {close.get('id')} followed exactly three not_found results "
+            "without another caller turn"
+            if safe
+            else f"end call {close.get('id')} followed {len(misses)} not_found results; "
+            f"caller_turn_after_last_not_found={caller_between}"
+        ),
+    }
+
+
 def _grade_expected_transfer(
     check: dict[str, Any], scenario: dict[str, Any], trace: dict[str, Any]
 ) -> dict[str, str]:
@@ -500,6 +543,8 @@ def grade_trace(
             checks.append(_grade_counter_direction(check, trace))
         elif check_type == "no_agreement_after_failed_write":
             checks.append(_grade_failed_write_closure(check, trace))
+        elif check_type == "third_not_found_close":
+            checks.append(_grade_third_not_found_close(check, trace))
         else:
             raise ValueError(f"unsupported check type: {check.get('type')!r}")
 

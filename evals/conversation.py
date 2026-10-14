@@ -256,6 +256,7 @@ def run_conversation(
         "meta": {
             "runner_level": "text_conversation",
             "model": model.model_id,
+            "model_metadata": copy.deepcopy(getattr(model, "metadata", {})),
             "production_prompt_loaded": True,
             "production_tool_schemas_loaded": True,
             "status": "error" if runner_error else "completed",

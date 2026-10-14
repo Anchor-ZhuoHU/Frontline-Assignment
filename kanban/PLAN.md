@@ -32,7 +32,7 @@ The offline scripted model also validates critical prompt-contract clauses befor
 - Acceptance: safe retry/error scenarios preserve the exact fake result in model context; the third `not_found` scenario calls `verify_carrier` and then ends with `mc_not_found`; deliberately quoting a currency or spoken rate before successful load lookup fails with event-level evidence.
 - Test first: one failing regression for each injected result shape, the third-not-found close, and premature rate disclosure.
 
-## T4 · Optional live GPT-4.1 repetitions, pass^k, and flake policy   tier: signature   status: todo
+## T4 · Optional live GPT-4.1 repetitions, pass^k, and flake policy   tier: signature   status: done
 - Serves: R2, R4, R8-R10 (C2-C4)
 - Scope: opt-in model adapter behind `--live --runs K`; require only a nonempty API key without printing it; send the same real prompt, schemas, caller turns, and fake-tool results; use `gpt-4.1` at temperature `0.7`; record model, temperature, run index, token usage when returned, and errors; compute pass^1 and pass^k by scenario. Write a flake policy that makes deterministic critical invariants and runner integrity merge-gating, while repeated live-model behavior remains report-only until an approved sample size, pass^k threshold, retry policy, and baseline owner exist.
 - Acceptance: fake HTTP/model tests prove request shape, tool-call parsing, no live call without both flag and key, and correct pass^k (`n=4, c=2, k=2` gives `1/6`). The report labels each check as gating or report-only. A live run is attempted only with the explicit flag and an available key.

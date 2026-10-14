@@ -8,6 +8,8 @@ The runner drives a pluggable model through a multi-turn conversation using the 
 
 A scripted model cannot measure nondeterministic model behavior or reliably predict the effect of arbitrary prompt wording changes. It can exercise the complete loop and enforce explicit prompt contracts. Repeated live runs are the behavioral measurement and should remain non-gating until the team defines a flake policy.
 
+Scripted caller turns are fixed independently of the agent's actual response. A live agent can therefore ask a question, recover from an error, or take a branch that makes the next scripted caller turn unnatural or inconsistent. Live traces must be reviewed for this drift; pass^k does not make the caller simulator adaptive.
+
 In scope are carrier verification, load lookup, rate negotiation, agreement and above-max bid recording, call closure, human transfer, and behavior after dependency failures. Out of scope for the offline merge gate are real PSTN calls, provider availability, recognition accuracy on audio, synthesis quality, caller-heard latency, and transfer infrastructure.
 
 ## Prioritized success conditions
@@ -31,7 +33,14 @@ In scope are carrier verification, load lookup, rate negotiation, agreement and 
 - Field capture: normalized expected values compared with tool arguments and fake end state.
 - Reliability: live or simulated nondeterministic scenarios must use repeated runs and report pass^k. Fixture replay is deterministic and must not be presented as pass^k.
 - Critical checks require 100 percent. With a small initial dataset, a percentage is never presented without its numerator and denominator.
-- A qualitative judge remains report-only until independently labeled calibration reaches Cohen's kappa >= 0.60 and failure recall >= 0.80. Constructed goldens and known-bad traces validate judge plumbing but are not independent human calibration.
+
+### Flake policy
+
+- The credential-free scripted suite is merge-gating. Every critical or major deterministic check must pass on every scenario; retries do not turn a failure into a pass.
+- Prompt/schema loading, runner completion, tool argument schemas, identity ordering, pricing confidentiality and ceilings, pre-load grounding, expected transfer behavior, and scenario-specific closure/counter checks are gating in the scripted suite.
+- Live GPT-4.1 runs are report-only. Reports include all attempts, errors, requested model settings, returned model ids and system fingerprints, plus pass^1 and pass^k; failed live checks do not fail the deterministic merge gate.
+- Do not retry only failed live samples. Rerun the complete declared sample set and retain both reports. Promotion to gating requires a product-approved run count, pass^k threshold, retry budget, cost owner, and baseline owner.
+- Transport/authentication failures make that live evidence set invalid rather than converting it into a model-policy failure. The report must still retain the error trace.
 
 ## Architecture
 

@@ -58,6 +58,46 @@ class FaultInjectionTest(unittest.TestCase):
         grounding = next(c for c in result["checks"] if c["check_id"] == "pricing.no_rate_before_load")
         self.assertEqual(grounding["status"], "pass")
 
+    def test_mc_not_found_close_before_third_miss_fails(self) -> None:
+        base = load("third_mc_not_found.json")
+        for misses in (1, 2):
+            with self.subTest(misses=misses):
+                scenario = copy.deepcopy(base)
+                scenario["caller_turns"] = scenario["caller_turns"][:misses]
+                scenario["fixtures"]["tool_results"]["verify_carrier"] = (
+                    scenario["fixtures"]["tool_results"]["verify_carrier"][:misses]
+                )
+                script = scenario["script"][: misses * 2]
+                script[-1]["text"] = "Sorry, I can't verify that MC."
+                script[-1]["tool_calls"] = [
+                    {"id": f"end-early-{misses}", "name": "end_call", "args": {"reason": "mc_not_found"}}
+                ]
+                scenario["script"] = script
+
+                result = self.grade(scenario)
+
+                self.assertFalse(result["passed"])
+                check = next(c for c in result["checks"] if c["check_id"] == "closing.third_mc_not_found")
+                self.assertIn(f"followed {misses} not_found", check["evidence"])
+
+    def test_caller_turn_between_third_miss_and_close_fails(self) -> None:
+        scenario = load("third_mc_not_found.json")
+        trace = run_conversation(scenario, ScriptedModel(scenario["script"]), self.contracts)
+        close_index = next(
+            i for i, event in enumerate(trace["events"])
+            if event.get("type") == "tool_call" and event.get("name") == "end_call"
+        )
+        trace["events"].insert(
+            close_index,
+            {"t_ms": 999, "type": "user_transcript", "text": "Wait, let me try again."},
+        )
+
+        result = grade_trace(scenario, trace)
+
+        self.assertFalse(result["passed"])
+        check = next(c for c in result["checks"] if c["check_id"] == "closing.third_mc_not_found")
+        self.assertIn("caller_turn_after_last_not_found=True", check["evidence"])
+
     def test_money_quote_before_successful_load_lookup_fails(self) -> None:
         for quote in ["I can offer $1500.", "I can offer fifteen hundred dollars."]:
             with self.subTest(quote=quote):
