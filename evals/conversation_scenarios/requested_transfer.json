@@ -1,0 +1,23 @@
+{
+  "schema_version": 1, "id": "requested_transfer", "org_name": "KCH",
+  "caller_turns": ["My MC is 123456.", "Yes. Reference LOAD-500.", "Let me speak to a person."],
+  "fixtures": {
+    "carrier": {"mc_number": "123456", "carrier_name": "Example Transport"}, "out_of_scope": false,
+    "load": {
+      "id": "LOAD-500", "load_id": "LOAD-500",
+      "origin": {"city": "Chicago", "state": "IL"}, "destination": {"city": "Dallas", "state": "TX"},
+      "pickupTime": "October 14th", "dropoffTime": "October 15th", "equipment": "Dry Van",
+      "commodity": "Goods", "specialInstructions": "None", "trackerRequired": false,
+      "startRate": 1500, "bookNowRate": 1650, "maxRate": 1800,
+      "transfer_call_to": "+15550100100", "transfer_country_code": "+1"
+    }
+  },
+  "expected": {"transfer": true, "checks": []},
+  "script": [
+    {"text": "Let me check.", "tool_calls": [{"id": "verify-1", "name": "verify_carrier", "args": {"mc_number": "123456"}}]},
+    {"expect_last_tool_result": {"status": "success"}, "text": "Is this Example Transport?"},
+    {"text": "One moment.", "tool_calls": [{"id": "load-1", "name": "get_load_context", "args": {"load_id": "LOAD-500"}}]},
+    {"expect_last_tool_result": {"status": "success"}, "text": "I've got the load. This lane is going for $1500."},
+    {"text": "I'll connect you.", "tool_calls": [{"id": "transfer-1", "name": "transfer_to_human", "args": {"reason": "caller requested human", "load_number": "LOAD-500"}}]}
+  ]
+}

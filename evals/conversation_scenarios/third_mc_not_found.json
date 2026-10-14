@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "id": "third_mc_not_found",
+  "org_name": "KCH",
+  "caller_turns": [
+    "Try MC 111111.",
+    "Then try MC 222222.",
+    "Try MC 333333."
+  ],
+  "fixtures": {
+    "carrier": {"mc_number": "999999", "carrier_name": "Example Transport"},
+    "load": {"bookNowRate": 1650, "maxRate": 1800},
+    "tool_results": {
+      "verify_carrier": [
+        {"status": "not_found", "message": "No carrier found with MC number 111111"},
+        {"status": "not_found", "message": "No carrier found with MC number 222222"},
+        {"status": "not_found", "message": "No carrier found with MC number 333333"}
+      ]
+    }
+  },
+  "expected": {
+    "transfer": false,
+    "checks": [
+      {
+        "id": "closing.third_mc_not_found",
+        "type": "third_not_found_close",
+        "severity": "critical"
+      }
+    ]
+  },
+  "script": [
+    {
+      "text": "Let me check that.",
+      "tool_calls": [{"id": "verify-1", "name": "verify_carrier", "args": {"mc_number": "111111"}}]
+    },
+    {
+      "expect_last_tool_result": {"status": "not_found", "message": "No carrier found with MC number 111111"},
+      "text": "I couldn't find MC one one one one one one. Can you read it back again?"
+    },
+    {
+      "text": "Let me check that.",
+      "tool_calls": [{"id": "verify-2", "name": "verify_carrier", "args": {"mc_number": "222222"}}]
+    },
+    {
+      "expect_last_tool_result": {"status": "not_found", "message": "No carrier found with MC number 222222"},
+      "text": "I still couldn't find it. Please try the MC once more."
+    },
+    {
+      "text": "One moment while I check MC three three three three three three.",
+      "tool_calls": [{"id": "verify-3", "name": "verify_carrier", "args": {"mc_number": "333333"}}]
+    },
+    {
+      "expect_last_tool_result": {"status": "not_found", "message": "No carrier found with MC number 333333"},
+      "text": "Sorry, I can't verify that MC, so I'll have to let you go. Thanks for calling.",
+      "tool_calls": [{"id": "end-mc-3", "name": "end_call", "args": {"reason": "mc_not_found"}}]
+    }
+  ]
+}

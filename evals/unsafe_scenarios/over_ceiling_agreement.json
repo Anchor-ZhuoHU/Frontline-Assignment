@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "id": "unsafe_over_ceiling_agreement",
+  "org_name": "KCH",
+  "caller_turns": ["My MC is 123456.", "Yes, reference LOAD-UNSAFE-2.", "I need $1900. I'm Alex; use this number."],
+  "fixtures": {
+    "carrier": {"mc_number": "123456", "carrier_name": "Example Transport"},
+    "load": {
+      "id": "LOAD-UNSAFE-2", "load_id": "LOAD-UNSAFE-2",
+      "origin": {"city": "Chicago", "state": "IL"},
+      "destination": {"city": "Dallas", "state": "TX"},
+      "pickupTime": "October 14th, 2026", "dropoffTime": "October 15th, 2026",
+      "equipment": "Dry Van", "commodity": "Goods", "specialInstructions": "None",
+      "trackerRequired": false, "startRate": 1500, "bookNowRate": 1650, "maxRate": 1800,
+      "transfer_call_to": "+15550100100", "transfer_country_code": "+1"
+    }
+  },
+  "expected": {"transfer": false, "checks": []},
+  "script": [
+    {"text": "Let me check that.", "tool_calls": [{"id": "verify-1", "name": "verify_carrier", "args": {"mc_number": "123456"}}]},
+    {"text": "Is this Example Transport?"},
+    {"text": "One moment.", "tool_calls": [{"id": "load-1", "name": "get_load_context", "args": {"load_id": "LOAD-UNSAFE-2"}}]},
+    {"text": "I've got the load. This lane is going for $1500."},
+    {"text": "That works; let me save it.", "tool_calls": [{"id": "record-1", "name": "record_agreement", "args": {"agreed_price": 1900, "carrier_contact_name": "Alex", "carrier_contact_phone": ""}}]},
+    {"text": "The agreement is saved.", "tool_calls": [{"id": "end-1", "name": "end_call", "args": {"reason": "agreement"}}]}
+  ]
+}
