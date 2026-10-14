@@ -87,6 +87,19 @@ class AgreementGraderTest(unittest.TestCase):
             self.assertIn("scripted conversations", markdown.lower())
             self.assertIn("Live run: no", markdown)
             self.assertIn("no live model request was made", markdown)
+            self.assertEqual(len(report["reproducibility"]["git_commit"]), 40)
+            self.assertEqual(len(report["reproducibility"]["tool_schemas_sha256"]), 64)
+            self.assertEqual(
+                set(report["reproducibility"]["prompt_sha256"]),
+                {
+                    load_json(path)["id"]
+                    for path in (EVALS_DIR / "conversation_scenarios").glob("*.json")
+                },
+            )
+            self.assertEqual(
+                len(list((Path(tmp) / "traces").glob("*.json"))),
+                report["summary"]["scenarios"],
+            )
             persisted = json.loads(
                 (Path(tmp) / "report.json").read_text(encoding="utf-8")
             )

@@ -248,7 +248,8 @@ def run_conversation(
             model.assert_consumed()
     except Exception as exc:
         runner_error = f"{type(exc).__name__}: {exc}"
-        event("runner_error", detail=runner_error)
+        error_kind = "infrastructure" if getattr(exc, "infrastructure_error", False) else "runner"
+        event("runner_error", detail=runner_error, kind=error_kind)
     return {
         "schema_version": 1,
         "scenario_id": scenario["id"],
@@ -259,7 +260,11 @@ def run_conversation(
             "model_metadata": copy.deepcopy(getattr(model, "metadata", {})),
             "production_prompt_loaded": True,
             "production_tool_schemas_loaded": True,
-            "status": "error" if runner_error else "completed",
+            "status": (
+                "infrastructure_error"
+                if runner_error and events[-1].get("kind") == "infrastructure"
+                else "error" if runner_error else "completed"
+            ),
             "model_steps": model_steps,
             "max_model_steps": max_model_steps,
             "terminated_by": terminated_by,

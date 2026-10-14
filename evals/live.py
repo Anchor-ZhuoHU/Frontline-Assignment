@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import copy
 import json
+import time
+import urllib.error
 import urllib.request
 from typing import Any, Protocol
 
@@ -16,11 +18,31 @@ class ChatTransport(Protocol):
     def create(self, payload: dict[str, Any]) -> dict[str, Any]: ...
 
 
+class InfrastructureError(RuntimeError):
+    infrastructure_error = True
+
+
 class OpenAIHTTPTransport:
-    def __init__(self, api_key: str) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        max_attempts: int = 3,
+        backoff_seconds: float = 0.5,
+        opener: Any = urllib.request.urlopen,
+        sleeper: Any = time.sleep,
+    ) -> None:
         if not api_key:
             raise ValueError("OPENAI_API_KEY is required for --live")
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be at least 1")
         self._api_key = api_key
+        self._max_attempts = max_attempts
+        self._backoff_seconds = backoff_seconds
+        self._opener = opener
+        self._sleeper = sleeper
+        self.total_retries = 0
+        self.last_attempts = 0
 
     def create(self, payload: dict[str, Any]) -> dict[str, Any]:
         request = urllib.request.Request(
@@ -32,8 +54,23 @@ class OpenAIHTTPTransport:
             },
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=60) as response:
-            return json.loads(response.read().decode("utf-8"))
+        for attempt in range(1, self._max_attempts + 1):
+            self.last_attempts = attempt
+            try:
+                with self._opener(request, timeout=60) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                retryable = exc.code == 429 or 500 <= exc.code <= 599
+                if retryable and attempt < self._max_attempts:
+                    self.total_retries += 1
+                    self._sleeper(self._backoff_seconds * (2 ** (attempt - 1)))
+                    continue
+                raise InfrastructureError(
+                    f"OpenAI HTTP {exc.code} after {attempt} attempt(s)"
+                ) from exc
+            except urllib.error.URLError as exc:
+                raise InfrastructureError(f"OpenAI transport error: {exc.reason}") from exc
+        raise AssertionError("unreachable retry loop")
 
 
 def to_chat_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -72,6 +109,8 @@ class OpenAIChatModel:
             "response_model": None,
             "system_fingerprints": [],
             "usage": [],
+            "transport_attempts": 0,
+            "transport_retries": 0,
         }
 
     def complete(
@@ -85,7 +124,15 @@ class OpenAIChatModel:
             "messages": to_chat_messages(messages),
             "tools": copy.deepcopy(tools),
         }
-        response = self._transport.create(payload)
+        try:
+            response = self._transport.create(payload)
+        finally:
+            self.metadata["transport_attempts"] += getattr(
+                self._transport, "last_attempts", 1
+            )
+            self.metadata["transport_retries"] = getattr(
+                self._transport, "total_retries", 0
+            )
         self.metadata["response_model"] = response.get("model")
         fingerprint = response.get("system_fingerprint")
         if fingerprint not in self.metadata["system_fingerprints"]:

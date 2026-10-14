@@ -36,9 +36,13 @@ def main() -> int:
             report = run_suite(evals_dir, args.output)
         summary = report["summary"]
         if args.live:
+            pass_k = summary["pass_at_k"]
             print(
                 f"live evaluation: {summary['passed']}/{summary['runs']} runs passed; "
-                f"pass^{args.k}={summary['pass_at_k']:.4f}"
+                f"pass^{args.k}={pass_k:.4f}"
+                if pass_k is not None
+                else f"live evaluation: pass^{args.k} unavailable; "
+                f"{summary['excluded_infrastructure_runs']} infrastructure run(s) excluded"
             )
         else:
             print(

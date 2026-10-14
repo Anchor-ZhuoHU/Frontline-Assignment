@@ -38,7 +38,7 @@ The offline scripted model also validates critical prompt-contract clauses befor
 - Acceptance: fake HTTP/model tests prove request shape, tool-call parsing, no live call without both flag and key, and correct pass^k (`n=4, c=2, k=2` gives `1/6`). The report labels each check as gating or report-only. A live run is attempted only with the explicit flag and an available key.
 - Test first: adapter and pass^k tests fail before implementation.
 
-## T4.1 · Reproducible evidence bundle   tier: mvp   status: todo
+## T4.1 · Reproducible evidence bundle   tier: mvp   status: done
 - Serves: R3-R4, R8-R10 (C3-C6)
 - Scope: add a reproducibility header to Markdown and JSON reports with Git commit, SHA-256 hashes of each rendered initial/negotiation prompt and the canonical production schemas, model id, temperature, `k`, and runs per scenario; save one complete trace per scripted scenario and every indexed live run under the selected output directory.
 - Acceptance: fixed inputs produce stable hashes; reports contain no API key or unrelated environment data; trace filenames are deterministic and link back to scenario/run metadata; tests verify the header and trace inventory.

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import io
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from evals.live import OpenAIChatModel, OpenAIHTTPTransport, to_chat_messages
+from evals.live import InfrastructureError, OpenAIChatModel, OpenAIHTTPTransport, to_chat_messages
+from evals.conversation import run_conversation
 from evals.runner import run_live_suite
 
 
@@ -24,6 +28,76 @@ class LiveAdapterTest(unittest.TestCase):
     def test_live_transport_requires_api_key(self) -> None:
         with self.assertRaisesRegex(ValueError, "OPENAI_API_KEY"):
             OpenAIHTTPTransport("")
+
+    def test_transport_retries_429_and_5xx_with_backoff(self) -> None:
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self) -> bytes:
+                return b'{"choices": [{"message": {"content": "ok"}}]}'
+
+        outcomes = [429, 503, Response()]
+        sleeps = []
+
+        def opener(_request, timeout):
+            self.assertEqual(timeout, 60)
+            outcome = outcomes.pop(0)
+            if isinstance(outcome, int):
+                raise urllib.error.HTTPError(
+                    "https://api.openai.com", outcome, "error", {}, io.BytesIO(b"error")
+                )
+            return outcome
+
+        transport = OpenAIHTTPTransport(
+            "test-key", opener=opener, sleeper=sleeps.append, backoff_seconds=0.25
+        )
+
+        response = transport.create({"model": "gpt-4.1"})
+
+        self.assertEqual(response["choices"][0]["message"]["content"], "ok")
+        self.assertEqual(sleeps, [0.25, 0.5])
+        self.assertEqual(transport.last_attempts, 3)
+        self.assertEqual(transport.total_retries, 2)
+
+    def test_transport_exhaustion_is_infrastructure_error(self) -> None:
+        def opener(_request, timeout):
+            raise urllib.error.HTTPError(
+                "https://api.openai.com", 500, "error", {}, io.BytesIO(b"error")
+            )
+
+        transport = OpenAIHTTPTransport(
+            "test-key", opener=opener, sleeper=lambda _delay: None
+        )
+
+        with self.assertRaisesRegex(InfrastructureError, "after 3 attempt"):
+            transport.create({"model": "gpt-4.1"})
+
+    def test_runner_tags_infrastructure_error_separately(self) -> None:
+        class FailingModel:
+            model_id = "gpt-4.1"
+            metadata = {"transport_retries": 2}
+
+            def complete(self, _messages, _tools):
+                raise InfrastructureError("OpenAI HTTP 429 after 3 attempt(s)")
+
+        contracts = SimpleNamespace(
+            room1_tools=[], initial_prompt=lambda org_name=None: "system"
+        )
+        scenario = {
+            "id": "infra", "caller_turns": ["hello"], "fixtures": {},
+            "expected": {"transfer": False, "checks": []},
+        }
+
+        trace = run_conversation(scenario, FailingModel(), contracts)
+
+        self.assertEqual(trace["meta"]["status"], "infrastructure_error")
+        error = next(event for event in trace["events"] if event["type"] == "runner_error")
+        self.assertEqual(error["kind"], "infrastructure")
+        self.assertEqual(trace["meta"]["model_metadata"]["transport_retries"], 2)
 
     def test_message_conversion_is_centralized(self) -> None:
         messages = [
@@ -104,6 +178,11 @@ class LiveAdapterTest(unittest.TestCase):
             )
             with (
                 patch("evals.runner.ProductionContracts.load", return_value=object()),
+                patch("evals.runner._reproducibility", return_value={
+                    "git_commit": "abc", "tool_schemas_sha256": "schema",
+                    "prompt_sha256": {"only": {"initial": "prompt"}},
+                    "hash_algorithm": "sha256",
+                }),
                 patch("evals.runner.run_conversation", return_value=trace) as run,
                 patch("evals.runner.grade_trace", side_effect=fake_grade),
             ):
@@ -114,6 +193,44 @@ class LiveAdapterTest(unittest.TestCase):
             self.assertAlmostEqual(report["summary"]["pass_at_k"], 1 / 3)
             self.assertEqual(report["results"][0]["model_metadata"]["system_fingerprints"], ["fp_x"])
             self.assertTrue(report["execution"]["live_run_occurred"])
+
+    def test_infrastructure_run_is_excluded_from_pass_hat_k(self) -> None:
+        class DummyModel:
+            model_id = "gpt-4.1"
+
+        traces = [
+            {"meta": {"status": "infrastructure_error", "model_metadata": {}}, "events": []},
+            {"meta": {"status": "completed", "model_metadata": {}}, "events": []},
+        ]
+        grades = [
+            {"scenario_id": "only", "passed": False, "checks": [], "trace_source": "conversation_runner"},
+            {"scenario_id": "only", "passed": True, "checks": [], "trace_source": "conversation_runner"},
+        ]
+        repro = {
+            "git_commit": "abc", "tool_schemas_sha256": "schema",
+            "prompt_sha256": {"only": {"initial": "prompt"}}, "hash_algorithm": "sha256",
+        }
+        with tempfile.TemporaryDirectory() as source, tempfile.TemporaryDirectory() as output:
+            evals_dir = Path(source)
+            (evals_dir / "conversation_scenarios").mkdir()
+            (evals_dir / "conversation_scenarios" / "only.json").write_text(
+                json.dumps({"id": "only"}), encoding="utf-8"
+            )
+            with (
+                patch("evals.runner.ProductionContracts.load", return_value=object()),
+                patch("evals.runner._reproducibility", return_value=repro),
+                patch("evals.runner.run_conversation", side_effect=traces),
+                patch("evals.runner.grade_trace", side_effect=grades),
+            ):
+                report = run_live_suite(evals_dir, Path(output), DummyModel, runs=2, k=1)
+
+            self.assertEqual(report["summary"]["excluded_infrastructure_runs"], 1)
+            self.assertEqual(report["summary"]["included_behavioral_runs"], 1)
+            self.assertEqual(report["summary"]["failed"], 0)
+            self.assertEqual(report["summary"]["pass_at_1"], 1.0)
+            self.assertEqual(report["summary"]["pass_at_k"], 1.0)
+            self.assertTrue(report["results"][0]["excluded_from_pass_k"])
+            self.assertEqual(len(list((Path(output) / "traces").glob("*.json"))), 2)
 
 
 if __name__ == "__main__":
