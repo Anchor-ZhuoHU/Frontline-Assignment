@@ -9,16 +9,16 @@
 
 This PR replaces Daily ingress, rooms, and transport with signed LiveKit webhooks and Telnyx-backed SIP participants. Its warm transfer is intended to pause the Room1 negotiation pipeline, play hold audio, brief a broker privately in Room2, move the broker into Room1, and retain a silent observer until either human leaves.
 
-The design is thoughtful about answer gating, move reconciliation, and several transfer races, but the implementation is not ready to merge. Production webhook events reject every real SIP participant before bot startup, caller audio is not actually gated during hold or after handoff, every broker connection is rejected because a participant SID is used to query an identity-keyed map, and the failed-transfer recovery announcement cannot be constructed.
+The design is thoughtful about answer gating, move reconciliation, and several transfer races, but the implementation is not ready to merge. Production webhook events reject every real SIP participant before bot startup, caller audio is not actually gated during hold or after handoff, every broker connection is rejected because a participant SID is used to query an identity-keyed map, and the outbound path rings callers before reserving the only agent slot.
 
 ## Verdict
 
-**Request changes.** Real inbound calls cannot start; the warm-transfer path cannot complete or notify the caller of failure; its intended privacy boundary does not stop carrier speech from reaching the model and transcript; and the provider replacement cannot be safely staged or rolled back.
+**Request changes.** Real inbound calls cannot start; the warm-transfer path cannot complete or notify the caller of failure; outbound callers can be rung and then dropped without a durable attempt record; and the provider replacement cannot be safely staged or rolled back.
 
 | Severity | Findings | Must-fix |
 | --- | ---: | ---: |
 | Critical | 6 | 6 |
-| High | 2 | 2 |
+| High | 3 | 3 |
 | Medium | 2 | 0 |
 | Low | 0 | 0 |
 
@@ -116,7 +116,17 @@ I also compared the PR fakes with the actual Pipecat 0.0.95 and LiveKit SDK sour
 - Fix: Preserve a bounded idle timeout with a safe default, add a short deadline for the expected caller to be observed after bot startup, and make either timeout cancel/finalize the pipeline and release `_active_bot_task`. On ordinary timeout, play any required closing prompt before using the idempotent Room1 termination from F6. Add a provider-side maximum duration as a final guard.
 - Test: Start the bot after the expected SIP participant has already left and emit no participant event. With short configured join/idle deadlines, assert the pipeline exits and a second `/start` is accepted rather than returning 409/503. Retain a silence test that asserts recording and call records finalize and Room1 is deleted.
 
-#### F8. There is no safe cutover or rollback path after deleting Daily
+#### F8. Outbound calls ring before agent capacity is reserved and failed attempts are not recorded
+
+- Severity: High
+- Label: must-fix
+- Location: `voice-agent/livekit_telephony_service.py:97`, `voice-agent/server.py:162`, `voice-agent/tests/test_server_livekit.py:81`
+- Scenario: `/outbound-call` creates a room and awaits `dial_phone()`. The SDK request sets `wait_until_answered=True`, so the HTTP request remains open for the entire ring and the bot is not started until the carrier answers. If the single-call runner is already occupied, `start_bot_local()` raises 503 only after answer; the broad handler deletes the room, immediately hanging up on the carrier who just picked up. If the number is busy or never answers, `dial_phone()` raises, the room is deleted, and the unclassified exception becomes a generic 500. Because call persistence starts inside the bot, which was never started, the failed outbound attempt leaves no call record or durable reason.
+- Cause: Admission, dialing, and persistence are ordered backwards for a single-capacity service: the irreversible external side effect occurs before runner capacity is reserved, while the endpoint synchronously owns the entire ringing interval. The lone test uses an immediately successful dial fake and verifies the problematic dial-before-start ordering; it covers neither runner rejection nor provider dial errors.
+- Fix: Create a durable outbound-attempt record and atomically reserve runner capacity before dialing. Start and health-check the bot in the room before placing the carrier leg, or use an explicit reservation token that the bot start must honor. Run the bounded dial workflow asynchronously and return 202 with an attempt ID immediately; persist state transitions and normalized terminal reasons such as busy, no-answer, timeout, bot-unavailable, and provider-error. On dial failure, cancel the reserved bot, delete the room idempotently, release capacity, and retain the failure record. Never ring unless an agent slot is guaranteed.
+- Test: With a busy runner, assert the endpoint does not call `dial_phone()` and returns a stable capacity response with a recorded failed/rejected attempt. With a dial fake blocked on an event, assert the HTTP request returns 202 before answer and the attempt remains `dialing`. Parameterize busy, no-answer, timeout, and provider error; assert each persists its reason, deletes Room1 once, releases the reservation, and never surfaces as an unclassified 500. In the success case, assert agent readiness/reservation precedes dialing and the same attempt record gains the provider call ID.
+
+#### F9. There is no safe cutover or rollback path after deleting Daily
 
 - Severity: High
 - Label: must-fix
@@ -128,7 +138,7 @@ I also compared the PR fakes with the actual Pipecat 0.0.95 and LiveKit SDK sour
 
 ### Medium
 
-#### F9. Fixing participant identity lookup will expose caller phone numbers in new logs
+#### F10. Fixing participant identity lookup will expose caller phone numbers in new logs
 
 - Severity: Medium
 - Label: suggestion
@@ -138,7 +148,7 @@ I also compared the PR fakes with the actual Pipecat 0.0.95 and LiveKit SDK sour
 - Fix: Never log participant identity or phone attributes directly. Log an internal call ID and opaque event/participant SID, mask any operationally necessary number, and document or provision `hide_phone_number` on the inbound dispatch rule. Audit exception logging for provider payloads as part of the same change.
 - Test: Feed an inbound participant whose identity is an E.164 number, capture info-level logs, and assert neither the full number nor transcript content appears.
 
-#### F10. Webhook deduplication is racy and process-local
+#### F11. Webhook deduplication is racy and process-local
 
 - Severity: Medium
 - Label: suggestion
@@ -169,11 +179,11 @@ This remains unqualified against a real call. `wait_until_answered` treats voice
 
 | ID | Requirement | Status | Evidence |
 | --- | --- | --- | --- |
-| R1 | Migrate webhook, rooms, Pipecat transport, and outbound dialing from Daily to LiveKit/Telnyx. | Not met | Real inbound LiveKit SIP events are rejected before startup, and normal termination and idle lifecycle are not equivalent (F1, F6, F7). |
+| R1 | Migrate webhook, rooms, Pipecat transport, and outbound dialing from Daily to LiveKit/Telnyx. | Not met | Real inbound events are rejected, normal termination and idle lifecycle are not equivalent, and outbound dialing precedes agent admission and persistence (F1, F6, F7, F8). |
 | R2 | Preserve the single-prompt negotiation architecture. | Met | Room1 retains one context and existing tool handlers in `voice-agent/bot.py`. |
 | R3 | Keep the carrier connected and privately brief the broker before handoff. | Not met | The carrier audio is not gated from the Room1 model/transcript (F2), and the real broker is rejected before briefing because SID and identity are confused (F3). |
 | R4 | Distinguish answer from early media and verify participant movement before success. | Met in code, not integration-tested | Answer plus subscribed-audio gates and destination reconciliation are present; declared tests could not run locally. |
-| R5 | Clean both rooms across success, failure, disconnect, timeout, and competing callbacks. | Not met | Failed-transfer recovery is silent, carrier departure can resurrect a cancelled attempt and leak late resources, normal-call rooms are omitted, and webhook idempotency is racy (F4, F5, F6, F10). |
+| R5 | Clean both rooms across success, failure, disconnect, timeout, and competing callbacks. | Not met | Failed-transfer recovery is silent, carrier departure can resurrect a cancelled attempt and leak late resources, normal-call rooms are omitted, and webhook idempotency is racy (F4, F5, F6, F11). |
 | R6 | Record transfer only after broker arrival; preserve transcript and consultation recording references. | Met in code, not integration-tested | `HANDOFF_COMPLETE` follows verified movement; audit data is appended during finalization. |
 | R7 | Isolate Slack failure and attribute records by provider. | Met in code | Notification exceptions are isolated; schema and dashboard add provider fields. |
 | R8 | Provide merge-ready evidence and operational safety for a real-time calling migration. | Not met | Tests were not runnable in this environment, ingress, media-gate, and Room2 participant fakes do not model the resolved libraries' behavior, and no cutover/rollback exists. |
