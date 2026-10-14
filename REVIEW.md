@@ -11,7 +11,7 @@
 - Blocker F1: real protobuf SIP events are rejected before an agent starts; compare the numeric enum through the supported protocol model.
 - Blocker F2: hold and handoff leave STT, the LLM, tools, and transcript capture live; gate input and stop Room1 processing after handoff.
 - Blocker F3: Room2 looks up a participant SID in an identity-keyed map, so every broker is rejected; resolve SID against real participant values.
-- Blocker F7: an early caller hang-up can occupy the only runner forever, so every later call fails; restore bounded join and idle cleanup.
+- Blocker F4: an early caller hang-up can occupy the only runner forever, so every later call fails; restore bounded join and idle cleanup.
 
 ## Change overview and review approach
 
@@ -28,28 +28,30 @@ I verified claims against the pinned Pipecat and LiveKit source and with `eviden
 | F1 | `voice-agent/livekit_ingress.py:201` | Compare the protobuf integer kind through the supported `livekit.protocol.models` API and test with a real protobuf event. |
 | F2 | `voice-agent/livekit_transfer_media.py:57` | Gate the actual input audio path during hold and stop the Room1 STT and LLM pipeline after handoff. |
 | F3 | `voice-agent/room2_pipeline_service.py:254` | Resolve callback SIDs against participant values because `remote_participants` is keyed by identity. |
-| F7 | `voice-agent/bot.py:365` | Restore bounded caller-join and idle timeouts so an early hang-up cannot permanently consume the runner. |
-| F4 | `voice-agent/livekit_transfer_media.py:150` | Construct `TTSSpeakFrame` with the pinned API and make failed-transfer recovery update context and audibly notify the caller. |
-| F5 | `voice-agent/orchestrator.py:215` | Cancel and join the owned transfer attempt on carrier departure, with terminal-state checks after every external await. |
-| F6 | `voice-agent/livekit_telephony_service.py:219` | Invoke this Room1 deletion path after the final response so `end_call` also disconnects the SIP leg. |
+| F4 | `voice-agent/bot.py:365` | Restore bounded caller-join and idle timeouts so an early hang-up cannot permanently consume the runner. |
+| F5 | `voice-agent/livekit_transfer_media.py:150` | Construct `TTSSpeakFrame` with the pinned API and make failed-transfer recovery update context and audibly notify the caller. |
+| F6 | `voice-agent/orchestrator.py:215` | Cancel and join the owned transfer attempt on carrier departure, with terminal-state checks after every external await. |
+| F7 | `voice-agent/livekit_telephony_service.py:219` | Invoke this Room1 deletion path after the final response so `end_call` also disconnects the SIP leg. |
 | F8 | `voice-agent/bot.py:693` | Define capacity-aware admission or isolation so a simultaneous caller is not left in a room without an agent. |
 | F9 | `voice-agent/server.py:180` | Reserve an agent and persist an attempt before dialing, then return an asynchronous attempt response. |
-| F13 | `voice-agent/server.py:108` | Keep a provider-selectable compatibility path and document a tested cutover and rollback sequence. |
-| F10 | `voice-agent/server.py:170` | Derive tenant scope from the exact authorized caller ID passed to the SIP dial request. |
-| F11 | `voice-agent/orchestrator.py:246` | Cancel the consultation deadline when handoff begins and give one arbiter ownership of terminal cleanup. |
-| F12 | `voice-agent/orchestrator.py:496` | Reconcile ambiguous moves in both rooms and keep departure cleanup active until participant location is resolved. |
+| F10 | `voice-agent/server.py:108` | Keep a provider-selectable compatibility path and document a tested cutover and rollback sequence. |
+| F11 | `voice-agent/server.py:170` | Derive tenant scope from the exact authorized caller ID passed to the SIP dial request. |
+| F12 | `voice-agent/orchestrator.py:246` | Cancel the consultation deadline when handoff begins and give one arbiter ownership of terminal cleanup. |
+| F13 | `voice-agent/orchestrator.py:496` | Reconcile ambiguous moves in both rooms and keep departure cleanup active until participant location is resolved. |
 | F14 | `voice-agent/livekit_ingress.py:168` | Treat invalid optional caller metadata as unavailable instead of rejecting an authenticated inbound call. |
 | F15 | `voice-agent/bot.py:521` | Mask participant identity before logging so fixing the SID lookup does not expose phone numbers. |
 | F16 | `voice-agent/server.py:123` | Claim webhook IDs atomically before side effects in a bounded shared idempotency store. |
 | F17 | `voice-agent/orchestrator.py:383` | Run Room2 cleanup before returning from every post-move recovery branch. |
 | F18 | `voice-agent/livekit_telephony_service.py:117` | Set a ringing timeout, separate answer and media budgets, and normalize provider failure reasons in the audit. |
+| F19 | `voice-agent/orchestrator.py:316` | Tell the answered broker that the carrier disconnected before deleting Room2. |
+| F20 | `voice-agent/server.py:153` | Treat every invalid API key, including non-ASCII input, as a 401 without raising. |
 
 | Severity | Findings | Must-fix |
 | --- | ---: | ---: |
 | Critical | 4 | 4 |
 | High | 6 | 6 |
-| Medium | 6 | 3 |
-| Low | 2 | 0 |
+| Medium | 6 | 0 |
+| Low | 4 | 0 |
 
 ## Tests and checks run
 
@@ -60,7 +62,7 @@ I verified claims against the pinned Pipecat and LiveKit source and with `eviden
 | PR `f93f7a5` | `python3 -m pytest tests -v --tb=short` | Blocked before collection by the same missing `pytest`; no pass count is claimed. |
 | PR `f93f7a5` | `python3 -m compileall -q voice-agent shared scripts` | Passed, exit 0. |
 | SDK source | `python3 -m zipfile -l /tmp/livekit_protocol-1.1.27-py3-none-any.whl \| rg 'livekit/protocol/(models\|models_pb2\|webhook)'` | Exit 0: the wheel lists `models.py`, `models.pyi`, `webhook.py`, and `webhook.pyi`; it contains no `models_pb2` module. |
-| PR `f93f7a5` race reproduction | `cd /path/to/Frontline-Assignment && FRONTLINE_REPO="$PWD" python3 /path/to/review-workspace/evidence/reproduce_transfer_carrier_races.py` | Passed, exit 0. Run with Python 3 from a Git clone that contains the pinned head object `f93f7a5`; no project dependencies are required. The script loads the real pinned `orchestrator.py` and `transfer_state.py` with `git show` and stubs only external telephony, notification, logging, and Pipecat-facing boundaries. Four controlled schedules reproduced; event orders are recorded in F5, F11, and F12. |
+| PR `f93f7a5` race reproduction | `cd /path/to/Frontline-Assignment && FRONTLINE_REPO="$PWD" python3 /path/to/review-workspace/evidence/reproduce_transfer_carrier_races.py` | Passed, exit 0. Run with Python 3 from a Git clone that contains the pinned head object `f93f7a5`; no project dependencies are required. The script loads the real pinned `orchestrator.py` and `transfer_state.py` with `git show` and stubs only external telephony, notification, logging, and Pipecat-facing boundaries. Four controlled schedules reproduced; event orders are recorded in F6, F12, and F13. |
 
 Base and head test counts and installed-library probes are unavailable because the requested isolated environment could not be created. No suite was rerun and no SDK reproduction script was run after the setup failure.
 
@@ -101,19 +103,19 @@ I also compared the PR fakes with the actual Pipecat 0.0.95 and LiveKit SDK sour
 - Fix: Resolve the callback SID by searching the real participant values for a matching `participant.sid` (or retain an explicit SID-to-identity mapping from the SDK participant event), then compare the resolved identity with the dialed identity. Avoid reaching through `_client` where possible; encapsulate the Pipecat-version workaround in one adapter.
 - Test: Make the fake match LiveKit: key the map by `broker-expected`, set `participant.identity="broker-expected"` and `participant.sid="PA_broker"`, and emit `PA_broker`. Assert connected/media-ready are set only for that pair, then cover an unexpected SID and unexpected identity. Add an adapter test against the pinned SDK mapping contract.
 
-#### F7. The migration removes the 300-second idle fail-safe and can permanently occupy the only runner slot
+#### F4. The migration removes the 300-second idle fail-safe and can permanently occupy the only runner slot
 
 - Severity: Critical
 - Label: must-fix
 - Location: `voice-agent/bot.py:365`, `voice-agent/bot.py:693`, `voice-agent/server_utils.py:44`
 - Scenario: A carrier can hang up after the webhook starts the bot task but before the bot joins Room1. Because the caller has already left, the bot receives no participant-connected or participant-disconnected event to cancel its pipeline. With `idle_timeout_secs=None`, the pipeline waits indefinitely and `_active_bot_task` permanently occupies the single-call runner. Every later `/start` receives 409 at `bot.py:693`; `start_bot_local()` converts that rejection to 503 at `server_utils.py:46`, so all subsequent inbound calls receive no agent until the process restarts. Silence, stalled media, or an LLM that stops producing turns can reach the same unbounded state.
-- Cause: The explicit `None` disables Pipecat's 300-second idle monitor. There is no bot-join deadline, call-duration timer, SIP `max_call_duration`, or pipeline idle handler, and runner admission has no stale-task reclamation. This also amplifies F6 because there is no server-side backstop for an abandoned call.
-- Fix: Preserve a bounded idle timeout with a safe default, add a short deadline for the expected caller to be observed after bot startup, and make either timeout cancel/finalize the pipeline and release `_active_bot_task`. On ordinary timeout, play any required closing prompt before using the idempotent Room1 termination from F6. Add a provider-side maximum duration as a final guard.
+- Cause: The explicit `None` disables Pipecat's 300-second idle monitor. There is no bot-join deadline, call-duration timer, SIP `max_call_duration`, or pipeline idle handler, and runner admission has no stale-task reclamation. This also amplifies F7 because there is no server-side backstop for an abandoned call.
+- Fix: Preserve a bounded idle timeout with a safe default, add a short deadline for the expected caller to be observed after bot startup, and make either timeout cancel/finalize the pipeline and release `_active_bot_task`. On ordinary timeout, play any required closing prompt before using the idempotent Room1 termination from F7. Add a provider-side maximum duration as a final guard.
 - Test: Start the bot after the expected SIP participant has already left and emit no participant event. With short configured join/idle deadlines, assert the pipeline exits and a second `/start` is accepted rather than returning 409/503. Retain a silence test that asserts recording and call records finalize and Room1 is deleted.
 
 ### High
 
-#### F4. Failed transfers silently strand the caller after hold music stops
+#### F5. Failed transfers silently strand the caller after hold music stops
 
 - Severity: High
 - Label: must-fix
@@ -123,7 +125,7 @@ I also compared the PR fakes with the actual Pipecat 0.0.95 and LiveKit SDK sour
 - Fix: Queue `TTSSpeakFrame(text=text)` using the pinned API and separately append a bounded transfer-failure event/result to the Room1 context before resuming the LLM. Do not silently suppress customer-notification failures: log them and use a tested fallback or terminate the call cleanly if speech cannot be restored.
 - Test: Exercise `_terminal_failure()` with the real `LiveKitTransferMedia.play_primary_announcement()` boundary and a collecting pipeline task. Assert hold stops, the input gate is restored, exactly one valid `TTSSpeakFrame` containing `TRANSFER_UNAVAILABLE_MESSAGE` is queued, and the Room1 context no longer says the transfer is in progress. Make the queue fail in a second test and assert the failure is observable and follows the defined fallback.
 
-#### F5. Carrier departure does not cancel an in-flight transfer attempt
+#### F6. Carrier departure does not cancel an in-flight transfer attempt
 
 - Severity: High
 - Label: must-fix
@@ -136,7 +138,7 @@ I also compared the PR fakes with the actual Pipecat 0.0.95 and LiveKit SDK sour
   - During Slack notify: `create_room → gate/start hold → Room2 pipeline start → notifier enter → carrier disconnect → pipeline stop → delete Room2 → media cleanup → phase=cancelled → notifier return → dial_phone(deleted Room2) → phase=dialing_broker, room2_name=None`.
   - During `create_room`: `create_room enter → carrier disconnect → phase=cancelled → create_room returns → gate/start hold → Room2 pipeline start → notify → dial_phone → mark answered → wait for broker → phase=consulting, room2_name=room2, pipeline still owned`.
 
-#### F6. `end_call` leaves the SIP caller connected to an empty room
+#### F7. `end_call` leaves the SIP caller connected to an empty room
 
 - Severity: High
 - Label: must-fix
@@ -166,7 +168,7 @@ I also compared the PR fakes with the actual Pipecat 0.0.95 and LiveKit SDK sour
 - Fix: Create a durable outbound-attempt record and atomically reserve runner capacity before dialing. Start and health-check the bot in the room before placing the carrier leg, or use an explicit reservation token that the bot start must honor. Run the bounded dial workflow asynchronously and return 202 with an attempt ID immediately; persist state transitions and normalized terminal reasons such as busy, no-answer, timeout, bot-unavailable, and provider-error. On dial failure, cancel the reserved bot, delete the room idempotently, release capacity, and retain the failure record. Never ring unless an agent slot is guaranteed.
 - Test: With a busy runner, assert the endpoint does not call `dial_phone()` and returns a stable capacity response with a recorded failed/rejected attempt. With a dial fake blocked on an event, assert the HTTP request returns 202 before answer and the attempt remains `dialing`. Parameterize busy, no-answer, timeout, and provider error; assert each persists its reason, deletes Room1 once, releases the reservation, and never surfaces as an unclassified 500. In the success case, assert agent readiness/reservation precedes dialing and the same attempt record gains the provider call ID.
 
-#### F13. There is no safe cutover or rollback path after deleting Daily
+#### F10. There is no safe cutover or rollback path after deleting Daily
 
 - Severity: High
 - Label: must-fix
@@ -178,30 +180,30 @@ I also compared the PR fakes with the actual Pipecat 0.0.95 and LiveKit SDK sour
 
 ### Medium
 
-#### F10. Outbound organization selection trusts a number that is not used as caller ID
+#### F11. Outbound organization selection trusts a number that is not used as caller ID
 
 - Severity: Medium
-- Label: must-fix
+- Label: suggestion
 - Location: `voice-agent/server.py:170`, `voice-agent/livekit_telephony_service.py:108`, `voice-agent/bot.py:246`
 - Scenario: An authorized `/outbound-call` request supplies `from_phone` for organization A while the configured outbound trunk number belongs to organization B. The server copies the request value into `AgentRequest.bot_phone`, and the bot uses it to select the organization name and ID, scope phone-first lookup, and create the call record. But `create_sip_participant()` always sets `sip_number` to `LIVEKIT_SIP_OUTBOUND_NUMBER`; the carrier actually sees B's configured number. The call can therefore greet and persist under A, and use A's tenant-scoped data, despite originating from B's telephony identity.
 - Cause: The API exposes a per-request `from_phone` that does not control the SDK dial. No equality or ownership check ties it to the configured trunk number, yet downstream code treats it as the authoritative called/bot number for tenant selection. The happy-path test uses a matching value and never exercises disagreement.
 - Fix: Use the exact caller ID passed to LiveKit as the authoritative `bot_phone`. With the current fixed-number gateway, remove `from_phone` from the request or require it to equal `selected_config.livekit_outbound_number` before any side effect. If multiple caller IDs are required, authorize the selected number against the authenticated tenant and pass that same selected value into both `sip_number` and `AgentRequest`; never derive tenant scope from an unverified display field.
 - Test: Send a request whose `from_phone` differs from `LIVEKIT_SIP_OUTBOUND_NUMBER`; assert rejection before room creation/dialing and no tenant lookup. On success, capture both the SDK request and `AgentRequest` and assert their caller-ID/bot-phone values are identical, authorized, and select the expected organization.
 
-#### F11. The consultation deadline can fail a handoff while the participant move is still in flight
+#### F12. The consultation deadline can fail a handoff while the participant move is still in flight
 
 - Severity: Medium
-- Label: must-fix
+- Label: suggestion
 - Location: `voice-agent/orchestrator.py:245`, `voice-agent/orchestrator.py:284`, `voice-agent/orchestrator.py:369`
 - Scenario: The Room2 LLM requests handoff near the consultation deadline. `execute_transfer_human_to_room1()` transitions to `HANDOFF_REQUESTED` and awaits `move_participant_verified()`, but the original consultation timer at line 246 continues independently. If it expires first, `_terminal_failure()` marks the attempt failed, stops the Room2 pipeline, deletes Room2, restores the Room1 bot, and marks the transfer complete. The in-flight move can then succeed. `_complete_handoff()` sees `_transfer_in_progress=False` and removes the broker who just arrived in Room1 at line 372. The carrier hears a failure recovery while the requested, successful handoff is immediately undone.
 - Cause: Consultation timeout and handoff execution are separate tasks competing to terminalize the same attempt. Starting a handoff neither cancels/transfers ownership of the consultation deadline nor waits for the move outcome before destructive failure cleanup. `_cleanup_lock` serializes each cleanup block but does not decide which terminal outcome owns the attempt.
 - Fix: Once `HANDOFF_REQUESTED` is accepted, atomically stop the consultation deadline and transfer terminal ownership to one bounded handoff operation. Do not delete Room2 or restore Room1 while a move outcome is pending. Use the attempt ID and a single terminal arbiter so timeout, move completion, and departure callbacks reconcile participant location before choosing success or recovery.
 - Test: Block `move_participant_verified()` until after the consultation deadline, then release it as a success. Assert no failure cleanup runs during the move, the broker remains in Room1, and exactly one terminal state is committed. The reproduction event order was: `move enter → consultation timeout → Room2 pipeline stop → delete Room2 → restore primary → failure announcement → phase=failed → move success into Room1 → remove broker from Room1 → final phase=failed`.
 
-#### F12. An ambiguous move can leave the carrier in dead air and leak Room1 after departure
+#### F13. An ambiguous move can leave the carrier in dead air and leak Room1 after departure
 
 - Severity: Medium
-- Label: must-fix
+- Label: suggestion
 - Location: `voice-agent/orchestrator.py:294`, `voice-agent/orchestrator.py:326`, `voice-agent/orchestrator.py:496`, `voice-agent/livekit_transfer_media.py:167`
 - Scenario: `move_participant_verified()` reports `ParticipantMoveOutcomeUnknown` and the broker did not arrive in Room1. `_terminal_failure()` deletes Room2, then `quarantine_ambiguous_handoff()` stops hold while retaining the observer and detaches the primary bot publisher. No code subsequently checks either room to determine where the broker actually is. The carrier therefore has neither broker, hold audio, nor bot audio. When the carrier eventually hangs up, `on_handoff_ended()` ignores the `FAILED` phase at line 339. The normal bot handler does cancel the Room1 pipeline at `bot.py:600`, but Room1 is not deleted and the retained observer is not stopped; because that observer remains connected, the room does not become empty and the resources leak.
 - Cause: Quarantine is implemented as a terminal state rather than a bounded reconciliation state with an owner and deadline. The participant-location uncertainty is never resolved, and departure cleanup handles only `HANDOFF_REQUESTED` and `HANDOFF_COMPLETE`, excluding the quarantined `FAILED` call.
@@ -260,14 +262,34 @@ I also compared the PR fakes with the actual Pipecat 0.0.95 and LiveKit SDK sour
 - Fix: Configure an explicit provider ringing timeout, use separate bounded answer and media-readiness budgets, and map provider error codes to stable audit reasons such as `broker_busy`, `broker_no_answer`, and `broker_trunk_error` while retaining a sanitized provider code for operations.
 - Test: Cover busy, no-answer, late answer with slow media, and trunk failure. Assert independent timing budgets and distinct stable terminal reasons in the transfer audit.
 
+#### F19. Carrier departure during briefing drops the broker without an explanation
+
+- Severity: Low
+- Label: suggestion
+- Location: `voice-agent/orchestrator.py:316`, `voice-agent/orchestrator.py:471`
+- Scenario: The broker has answered and is being briefed in Room2 when the carrier hangs up in Room1. `on_carrier_left_primary()` immediately calls terminal cleanup, which stops the Room2 pipeline, deletes Room2, and disconnects the broker. The broker hears an abrupt hang-up with no message explaining that the carrier left.
+- Cause: The carrier-departure path passes `restore_primary=False` directly into generic cleanup. It has no broker-facing announcement or short drain step before deleting the secondary room.
+- Fix: If the broker leg has answered, play a brief deterministic carrier-disconnected message in Room2, wait for that frame to drain within a small bound, then delete Room2. Skip the message when the leg is still ringing or media never became ready.
+- Test: Put the transfer in `CONSULTING`, trigger carrier departure, and assert the broker hears the disconnect message before the Room2 pipeline stops and the room is deleted. Cover the still-ringing path to ensure it cleans up without waiting for speech.
+
+#### F20. A non-ASCII outbound API key produces a server error
+
+- Severity: Low
+- Label: suggestion
+- Location: `voice-agent/server.py:153`
+- Scenario: A client sends a non-ASCII `X-API-Key` while outbound calling is enabled. Python's string form of `secrets.compare_digest()` accepts ASCII-only strings and raises `TypeError` for this input, so the request escapes the authorization branch and returns 500 instead of 401.
+- Cause: The endpoint passes unvalidated header strings directly to `compare_digest()` and does not catch its type or encoding error.
+- Fix: Encode both values to bytes with one documented encoding after rejecting malformed input, or catch `TypeError` and handle it exactly like any other credential mismatch. Keep response behavior identical for all invalid keys.
+- Test: Send missing, incorrect ASCII, correct, and non-ASCII API keys. Assert the first, second, and fourth return the same 401 response, the correct key proceeds, and no comparison exception reaches the server.
+
 ## Normal-call parity
 
 | Behavior | Daily base | LiveKit PR | Assessment |
 | --- | --- | --- | --- |
 | Call start | Daily waits for both `on_dialin_connected` and the real participant before recording, call creation, and `LLMRunFrame`. | A real protobuf SIP kind is rejected with 422 before the bot runner is called. | Broken, F1. |
 | Caller hangs up | Matching Daily client disconnect stops recording and cancels the task. | Matching LiveKit participant disconnect stops recording, handles transfer cancellation if active, and cancels the task. | Preserved in code. |
-| Agent ends call | Base has no explicit phone-leg termination on `EndFrame`; as an eventual backstop, Daily rooms expired after three hours with `eject_at_room_exp=True`. | `EndFrame` disconnects only the bot and does not delete Room1 or remove SIP. | LiveKit cleanup is broken; exact Daily phone-leg behavior is an assumption, F6. |
-| Idle timeout | Pipecat default: 300 seconds. | Explicitly disabled with `None`; no caller-join deadline or provider maximum replaces it. | Regression, F7. |
+| Agent ends call | Base has no explicit phone-leg termination on `EndFrame`; as an eventual backstop, Daily rooms expired after three hours with `eject_at_room_exp=True`. | `EndFrame` disconnects only the bot and does not delete Room1 or remove SIP. | LiveKit cleanup is broken; exact Daily phone-leg behavior is an assumption, F7. |
+| Idle timeout | Pipecat default: 300 seconds. | Explicitly disabled with `None`; no caller-join deadline or provider maximum replaces it. | Regression, F4. |
 
 ## What the broker hears and what is recorded
 
@@ -281,12 +303,12 @@ This remains unqualified against a real call. `wait_until_answered` treats voice
 
 | ID | Requirement | Status | Evidence |
 | --- | --- | --- | --- |
-| R1 | Migrate webhook, rooms, Pipecat transport, and outbound dialing from Daily to LiveKit/Telnyx. | Not met | Real inbound events are rejected, concurrency regresses to one call per runner, and outbound admission/tenant identity do not match the actual dial (F1, F6, F7, F8, F9, F10, F14). |
+| R1 | Migrate webhook, rooms, Pipecat transport, and outbound dialing from Daily to LiveKit/Telnyx. | Not met | Real inbound events are rejected, concurrency regresses to one call per runner, and outbound admission/tenant identity do not match the actual dial (F1, F4, F7, F8, F9, F11, F14). |
 | R2 | Preserve the single-prompt negotiation architecture. | Met | Room1 retains one context and existing tool handlers in `voice-agent/bot.py`. |
-| R3 | Keep the carrier connected and privately brief the broker before handoff. | Not met | Carrier audio is not gated from the Room1 model/transcript, the broker is rejected before briefing, and ambiguous handoff can leave the carrier with no audio path (F2, F3, F12). |
-| R4 | Distinguish answer from early media and verify participant movement before success. | Not met | Answer/media gates exist, but the consultation timeout races a verified move and an unknown move outcome is never reconciled (F11, F12). |
-| R5 | Clean both rooms across success, failure, disconnect, timeout, and competing callbacks. | Not met | Carrier departure can resurrect a cancelled attempt, timeout can race a move, quarantine leaks Room1, normal-call rooms are omitted, and webhook idempotency is racy (F5, F6, F11, F12, F16). |
-| R6 | Record transfer only after broker arrival; preserve transcript and consultation recording references. | Met in code, not integration-tested | `HANDOFF_COMPLETE` follows verified movement; audit data is appended during finalization. |
+| R3 | Keep the carrier connected and privately brief the broker before handoff. | Not met | Carrier audio is not gated from the Room1 model/transcript, the broker is rejected before briefing, and ambiguous handoff can leave the carrier with no audio path (F2, F3, F13). |
+| R4 | Distinguish answer from early media and verify participant movement before success. | Not met | No real broker passes the answer/media gate because participant lookup uses a SID against an identity-keyed map; independently, the consultation timeout races a verified move and an unknown move outcome is never reconciled (F3, F12, F13). |
+| R5 | Clean both rooms across success, failure, disconnect, timeout, and competing callbacks. | Not met | Carrier departure can resurrect a cancelled attempt, timeout can race a move, quarantine leaks Room1, normal-call rooms are omitted, and webhook idempotency is racy (F6, F7, F12, F13, F16). |
+| R6 | Record transfer only after broker arrival; preserve transcript and consultation recording references. | Partly met | `HANDOFF_COMPLETE` follows verified movement and audit data is appended during finalization, but a post-handoff `end_call` can overwrite `call_transferred` and erase the transfer outcome (F2). |
 | R7 | Isolate Slack failure and attribute records by provider. | Met in code | Notification exceptions are isolated; schema and dashboard add provider fields. |
 | R8 | Provide merge-ready evidence and operational safety for a real-time calling migration. | Not met | Tests were not runnable in this environment, ingress, media-gate, and Room2 participant fakes do not model the resolved libraries' behavior, and no cutover/rollback exists. |
 
@@ -298,11 +320,12 @@ This remains unqualified against a real call. `wait_until_answered` treats voice
 - Q4. How many isolated bot-runner instances serve production, and what component performs atomic capacity-aware routing? The checked-in/default topology has one static `LOCAL_BOT_URL` and one active-task slot, so any external concurrency guarantee is merge-critical deployment evidence.
 - Q5. Does LiveKit `MoveParticipant` preserve the participant SID? `bot.py:583` matches a departing broker against the SID captured in Room2, so a SID change during the move would make the Room1 departure invisible to cleanup.
 - Q6. Does deleting Room2 guarantee cancellation and hang-up of a broker SIP leg that is still ringing? If not, the transfer failure paths need explicit late-leg cancellation and reconciliation.
+- Q7. `web/src/services/supabase/server/dashboard.ts:41` selects the new provider columns, so the web app cannot ship before the migration runs. What is the required database, backend, and web deployment order, and how is rollback handled between those steps?
 
 ## Assumptions and unresolved integration risks
 
 - I assumed standard LiveKit Cloud because `MoveParticipant` is Cloud-only. A self-hosted target would make the handoff unsupported.
-- F6's comparison with Daily phone-leg behavior is an assumption. Base contains no explicit `EndFrame` hang-up path; it configured pooled rooms for three-hour expiry with `eject_at_room_exp=True` at `voice-agent/room_pool_service.py:111`.
+- F7's comparison with Daily phone-leg behavior is an assumption. Base contains no explicit `EndFrame` hang-up path; it configured pooled rooms for three-hour expiry with `eject_at_room_exp=True` at `voice-agent/room_pool_service.py:111`.
 - I treated voicemail classification and durable crash recovery as declared future scope, not hidden findings. They remain launch risks.
 - Real LiveKit/Telnyx calls, speech providers, Supabase persistence, Slack, and the dashboard were not exercised because no provisioned development services or credentials were available.
 - The existing info-level full-transcript logging predates this PR. It is a material PII concern, but not a PR-introduced finding.
@@ -313,3 +336,4 @@ This remains unqualified against a real call. `wait_until_answered` treats voice
 - Production provider configuration or live calls.
 - Visual dashboard behavior and the private UI package build.
 - Exact Telnyx trunk behavior beyond LiveKit's documented SIP contract.
+
