@@ -13,6 +13,14 @@
 - Blocker F3: Room2 looks up a participant SID in an identity-keyed map, so every broker is rejected; resolve SID against real participant values.
 - Blocker F7: an early caller hang-up can occupy the only runner forever, so every later call fails; restore bounded join and idle cleanup.
 
+## Change overview and review approach
+
+The PR replaces Daily with signed LiveKit webhook ingress, LiveKit rooms and transport, and Telnyx-backed SIP dialing, while adding warm transfer and provider-aware persistence.
+A normal call now starts from a SIP participant event, launches the single Room1 negotiation pipeline, records there, and relies on participant events and pipeline finalization for cleanup.
+A warm transfer holds the carrier in Room1, creates a private Room2 pipeline to dial and brief the broker, moves the broker to Room1, then retains a departure observer while the humans talk.
+I focused on production SDK boundaries, audio and transcript isolation, state-machine races, lifecycle cleanup, capacity, PII, and cutover because failures there strand callers or corrupt call records.
+I verified claims against the pinned Pipecat and LiveKit source and with `evidence/reproduce_transfer_carrier_races.py`, which drives the real pinned orchestrator and transfer state through four controlled race schedules.
+
 ## Line comments
 
 | Finding | PR head anchor | One-line ask |
@@ -52,7 +60,7 @@
 | PR `f93f7a5` | `python3 -m pytest tests -v --tb=short` | Blocked before collection by the same missing `pytest`; no pass count is claimed. |
 | PR `f93f7a5` | `python3 -m compileall -q voice-agent shared scripts` | Passed, exit 0. |
 | SDK source | `python3 -m zipfile -l /tmp/livekit_protocol-1.1.27-py3-none-any.whl \| rg 'livekit/protocol/(models\|models_pb2\|webhook)'` | Exit 0: the wheel lists `models.py`, `models.pyi`, `webhook.py`, and `webhook.pyi`; it contains no `models_pb2` module. |
-| PR `f93f7a5` race reproduction | `python3 /tmp/reproduce_transfer_carrier_races.py` | Passed, exit 0. The script loads the real pinned `orchestrator.py` and `transfer_state.py` via `git show` and stubs only external telephony, notification, logging, and Pipecat-facing boundaries. Four controlled schedules reproduced; event orders are recorded in F5, F11, and F12. |
+| PR `f93f7a5` race reproduction | `cd /path/to/Frontline-Assignment && FRONTLINE_REPO="$PWD" python3 /path/to/review-workspace/evidence/reproduce_transfer_carrier_races.py` | Passed, exit 0. Run with Python 3 from a Git clone that contains the pinned head object `f93f7a5`; no project dependencies are required. The script loads the real pinned `orchestrator.py` and `transfer_state.py` with `git show` and stubs only external telephony, notification, logging, and Pipecat-facing boundaries. Four controlled schedules reproduced; event orders are recorded in F5, F11, and F12. |
 
 Base and head test counts and installed-library probes are unavailable because the requested isolated environment could not be created. No suite was rerun and no SDK reproduction script was run after the setup failure.
 
