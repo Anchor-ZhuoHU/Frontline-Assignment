@@ -12,18 +12,46 @@ Scripted caller turns are fixed independently of the agent's actual response. A 
 
 In scope are carrier verification, load lookup, rate negotiation, agreement and above-max bid recording, call closure, human transfer, and behavior after dependency failures. Out of scope for the offline merge gate are real PSTN calls, provider availability, recognition accuracy on audio, synthesis quality, caller-heard latency, and transfer infrastructure.
 
-## Prioritized success conditions
+## End-to-end system map
 
-| Call type | Condition | Evidence | Method | Severity |
-| --- | --- | --- | --- | --- |
-| Agreement | Persist the caller-accepted price for the loaded freight | `record_agreement` arguments and fake end state | Code | Critical |
-| Any negotiation | Never reveal the internal goal or ceiling | Agent text compared with fixture pricing | Code | Critical |
-| Any load discussion | Verify carrier before load lookup | Ordered tool calls and successful results | Code | Critical |
-| Above-max bid | Capture price, name, and phone with `above_max=true` | Tool arguments and fake end state | Code | Critical |
-| Transfer | Transfer only after identity and load verification, and only when expected | Ordered calls and transfer event | Code | Critical |
-| Tool failure | Do not claim success after an error result | Tool result followed by agent text | Code, with judge as a later report-only cross-check | Critical |
-| Closure | Record the outcome with the matching end reason | `end_call` argument | Code | Major |
-| Any call | Speak naturally without exposing internal function names | Agent text | Code for names; calibrated judge for tone | Major or minor |
+```text
+PSTN / Daily room
+  -> audio pipeline: Deepgram STT -> GPT-4.1 -> Cartesia TTS
+  -> one initial prompt (identity, load lookup, tool and transfer rules)
+  -> verify_carrier -> Highway/legacy carrier lookup -> caller identity in call context
+  -> get_load_context -> Supabase load read -> load state + call/load link write
+                      -> replace system message with full negotiation prompt
+                         (initial rules + load facts + confidential pricing strategy)
+  -> model/tool loop
+       record_agreement -> negotiation row write -> carrier quote notification
+       transfer_to_human -> Daily dial-out/room transfer + Slack notification
+       end_call -> termination reason in context + pipeline end frame
+  -> recording/call metadata persistence and upload
+```
+
+The offline evaluator follows the same prompt and tool-contract path without starting the audio pipeline or providers: JSON caller turns -> pluggable model -> production prompts and schemas -> in-memory tool fakes -> ordered trace -> deterministic graders -> Markdown/JSON report. A successful fake `get_load_context` performs the same prompt swap. The optional live adapter changes only the model implementation; all tools remain fake.
+
+Production reads carrier identity from Highway or its legacy fallback and load data from Supabase. It writes call/load association, negotiation results, quote notifications, call termination state, transfer notifications, and recordings. None of those external reads or writes occur in the default or live-model evaluation modes.
+
+## Risk coverage
+
+| Product risk | Check | Scenario/evidence | Gate |
+| --- | --- | --- | --- |
+| Runner stops, loops forever, or hides a contract/tool exception | `runner.completed` | Every trace; exception or step-limit evidence | Scripted gate |
+| A safety-critical production prompt instruction is removed | `prompt.critical_clauses` | Every rendered prompt; clause id and protected check; per-clause mutation test | Scripted gate |
+| Goal or ceiling is spoken in digits, currency, or words | `pricing.no_confidential_leak` | Every agent turn in every scenario; offending amount/event | Scripted gate |
+| A rate is quoted before load lookup succeeds | `pricing.no_rate_before_load` | Every trace, including injected load failures | Scripted gate |
+| Load data is requested before verified or confirmed phone identity | `identity.verify_before_load` | Ordered successful tool results or explicit phone-identity fixture | Scripted gate |
+| Any persisted agreement exceeds the ceiling without `above_max=true` | `agreement.ceiling_policy` | Every `record_agreement` call, not only the last | Scripted gate |
+| A tool call has missing, wrongly typed, or invalid-enum arguments | `tools.arguments_match_schema` | Every tool call against AST-loaded production schemas; unsafe enum/type variant | Scripted gate |
+| Transfer happens unexpectedly or is omitted when required | `transfer.expected` | Scenario declaration compared with observed transfer calls | Scripted gate |
+| The accepted price is not the value persisted | `agreement.correct_price` | Happy-path `record_agreement` arguments | Scripted gate |
+| Agent counters above an already-below-goal carrier offer | `negotiation.no_counter_up` | All currency/spoken rate amounts before the next caller turn | Scripted gate |
+| Agent claims agreement after persistence failed | `closing.no_agreement_after_failed_write` | Failed tool result followed by close behavior | Scripted gate |
+| Agent hangs up before exactly three consecutive missing MC results, or fails to hang up on the third | `closing.third_mc_not_found` | Ordered `not_found` results, caller turns, and `end_call` reason | Scripted gate |
+| Model behavior varies across identical calls | The same checks above plus pass^k | Repeated opt-in GPT-4.1 traces; infrastructure errors excluded and counted | Report-only |
+
+Every default invariant applies to every scenario. Scenario-specific checks add outcome expectations; they cannot disable the defaults. All deterministic critical and major checks require 100 percent passage.
 
 ## Measurement and gate policy
 
@@ -72,6 +100,21 @@ By default reports go to `/tmp/frontline-evals`, keeping routine output out of t
 ## External boundaries and safety
 
 The production pipeline initializes Daily, Deepgram, OpenAI, Cartesia, Supabase, Highway or the legacy carrier API, the KCH quote API, and Slack. The default evaluator initializes none of them. Future real-prompt runs must replace every state-changing tool with an in-memory fake and cap turns, duration, and repetitions. Live-model runs remain separate from the credential-free merge gate.
+
+## Production code gaps found while building the evaluator
+
+### Code-confirmed
+
+- `record_agreement` validates that a load is present, converts the price, and requires contact details for `above_max`, but it does not compare `agreed_price` with the loaded `maxRate`. Ceiling enforcement currently depends on the prompt and evaluator; the persistence boundary can store an over-ceiling row without `above_max=true`.
+- `get_load_context` validates the reference shape and tenant-scoped load lookup, but it does not require a preceding successful `verify_carrier` result or an explicit phone-identity confirmation. Identity-before-load authorization currently depends on the prompt and evaluator.
+
+These are observations, not production changes: this assessment keeps the existing single-prompt architecture and production behavior intact.
+
+### Inferred or not verified here
+
+- Fixed scripted caller turns can drift from a live model's preceding question. This is a runner-design limitation, not evidence of a production defect.
+- Text traces cannot establish ASR accuracy, synthesized speech quality, interruption behavior, caller-heard latency, or provider reliability.
+- The scenarios are synthetic and small. Their risk coverage is deliberate, but without redacted production calls they do not establish the frequency or full variety of real caller behavior.
 
 ## Assumptions and limitations
 

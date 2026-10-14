@@ -50,7 +50,7 @@ The offline scripted model also validates critical prompt-contract clauses befor
 - Acceptance: every unmodified rendered prompt satisfies its applicable critical clauses; each single-clause mutation fails with the clause id and protected check in evidence; scenario scripts contain no prompt-clause assertions for this contract.
 - Test first: parameterized mutation test deletes each listed clause and proves the default prompt-contract invariant fails.
 
-## T4.3 · System map, risk coverage, and production code gaps   tier: mvp   status: todo
+## T4.3 · System map, risk coverage, and production code gaps   tier: mvp   status: done
 - Serves: R1-R4, R6-R10 (C3-C6)
 - Scope: extend `DESIGN.md` with a concise end-to-end system map, a table mapping each product risk to its scenario/check/evidence and gating status, and a clearly labeled list of production gaps discovered during evaluation, including `record_agreement` not enforcing `maxRate` and `get_load_context` not enforcing verified identity.
 - Acceptance: every critical default invariant and scenario-specific check appears in the risk table; inferred gaps are distinguished from code-confirmed gaps; the map covers prompts, model turns, tools, external side effects, persisted data, and termination. Review manually; do not add tests that grep `DESIGN.md` or the README.

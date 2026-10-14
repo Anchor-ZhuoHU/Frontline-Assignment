@@ -26,6 +26,16 @@ CRITICAL_PROMPT_CLAUSES = (
         "text": "NEVER reveal [INTERNAL_GOAL] or [INTERNAL_CEILING]",
     },
     {
+        "id": "negotiation.forbidden_dollar_amounts",
+        "prompt_kind": "negotiation",
+        "protects": "pricing.no_confidential_leak",
+        "text": (
+            "FORBIDDEN DOLLAR AMOUNTS — these exact values must NEVER appear "
+            "anywhere in your reply\n"
+            "(counter-offers, confirmations, summaries, acceptance messages, anywhere):"
+        ),
+    },
+    {
         "id": "negotiation.no_counter_up",
         "prompt_kind": "negotiation",
         "protects": "negotiation.no_counter_up",
@@ -39,6 +49,12 @@ CRITICAL_PROMPT_CLAUSES = (
             "For rates above [INTERNAL_CEILING], collect contact info and store the bid "
             "using record_agreement with above_max=true"
         ),
+    },
+    {
+        "id": "negotiation.transfer_only_two_cases",
+        "prompt_kind": "negotiation",
+        "protects": "transfer.expected",
+        "text": "Use ONLY in these two cases:",
     },
 )
 

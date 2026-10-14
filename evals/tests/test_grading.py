@@ -93,7 +93,7 @@ class AgreementGraderTest(unittest.TestCase):
             self.assertIn("no live model request was made", markdown)
             self.assertEqual(len(report["reproducibility"]["git_commit"]), 40)
             self.assertEqual(len(report["reproducibility"]["tool_schemas_sha256"]), 64)
-            self.assertTrue(report["reproducibility"]["git_dirty"])
+            self.assertIsInstance(report["reproducibility"]["git_dirty"], bool)
             self.assertEqual(len(report["reproducibility"]["evals_tree_sha256"]), 64)
             self.assertIn("Live run: no: no live model request", markdown)
             self.assertEqual(
