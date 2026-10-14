@@ -13,12 +13,35 @@
 - Blocker F3: Room2 looks up a participant SID in an identity-keyed map, so every broker is rejected; resolve SID against real participant values.
 - Blocker F7: an early caller hang-up can occupy the only runner forever, so every later call fails; restore bounded join and idle cleanup.
 
+## Line comments
+
+| Finding | PR head anchor | One-line ask |
+| --- | --- | --- |
+| F1 | `voice-agent/livekit_ingress.py:201` | Compare the protobuf integer kind through the supported `livekit.protocol.models` API and test with a real protobuf event. |
+| F2 | `voice-agent/livekit_transfer_media.py:57` | Gate the actual input audio path during hold and stop the Room1 STT and LLM pipeline after handoff. |
+| F3 | `voice-agent/room2_pipeline_service.py:254` | Resolve callback SIDs against participant values because `remote_participants` is keyed by identity. |
+| F7 | `voice-agent/bot.py:365` | Restore bounded caller-join and idle timeouts so an early hang-up cannot permanently consume the runner. |
+| F4 | `voice-agent/livekit_transfer_media.py:150` | Construct `TTSSpeakFrame` with the pinned API and make failed-transfer recovery update context and audibly notify the caller. |
+| F5 | `voice-agent/orchestrator.py:215` | Cancel and join the owned transfer attempt on carrier departure, with terminal-state checks after every external await. |
+| F6 | `voice-agent/livekit_telephony_service.py:219` | Invoke this Room1 deletion path after the final response so `end_call` also disconnects the SIP leg. |
+| F8 | `voice-agent/bot.py:693` | Define capacity-aware admission or isolation so a simultaneous caller is not left in a room without an agent. |
+| F9 | `voice-agent/server.py:180` | Reserve an agent and persist an attempt before dialing, then return an asynchronous attempt response. |
+| F13 | `voice-agent/server.py:108` | Keep a provider-selectable compatibility path and document a tested cutover and rollback sequence. |
+| F10 | `voice-agent/server.py:170` | Derive tenant scope from the exact authorized caller ID passed to the SIP dial request. |
+| F11 | `voice-agent/orchestrator.py:246` | Cancel the consultation deadline when handoff begins and give one arbiter ownership of terminal cleanup. |
+| F12 | `voice-agent/orchestrator.py:496` | Reconcile ambiguous moves in both rooms and keep departure cleanup active until participant location is resolved. |
+| F14 | `voice-agent/livekit_ingress.py:168` | Treat invalid optional caller metadata as unavailable instead of rejecting an authenticated inbound call. |
+| F15 | `voice-agent/bot.py:521` | Mask participant identity before logging so fixing the SID lookup does not expose phone numbers. |
+| F16 | `voice-agent/server.py:123` | Claim webhook IDs atomically before side effects in a bounded shared idempotency store. |
+| F17 | `voice-agent/orchestrator.py:383` | Run Room2 cleanup before returning from every post-move recovery branch. |
+| F18 | `voice-agent/livekit_telephony_service.py:117` | Set a ringing timeout, separate answer and media budgets, and normalize provider failure reasons in the audit. |
+
 | Severity | Findings | Must-fix |
 | --- | ---: | ---: |
 | Critical | 4 | 4 |
 | High | 6 | 6 |
 | Medium | 6 | 3 |
-| Low | 0 | 0 |
+| Low | 2 | 0 |
 
 ## Tests and checks run
 
@@ -206,6 +229,28 @@ I also compared the PR fakes with the actual Pipecat 0.0.95 and LiveKit SDK sour
 - Cause: the handler performs a non-atomic check at lines 123-124, awaits the side effect at line 140, and only records the event at line 141. The test sends duplicates sequentially and therefore misses the race.
 - Fix: Claim the event ID atomically before the side effect in a bounded shared idempotency store, track processing/succeeded states, and return a successful acknowledgement for duplicate deliveries. If the fixed single-process deployment is a hard constraint, at minimum guard the bounded set with a lock and reserve the ID before awaiting.
 - Test: Issue two concurrent requests with the same verified event and a blocked bot starter. Assert one start call and successful idempotent responses; add a restart or second-instance test if the service can scale horizontally.
+
+### Low
+
+#### F17. Post-move recovery returns before cleaning Room2
+
+- Severity: Low
+- Label: suggestion
+- Location: `voice-agent/orchestrator.py:383`, `voice-agent/orchestrator.py:396`, `voice-agent/orchestrator.py:405`, `voice-agent/transfer_state.py:117`
+- Scenario: The broker arrives in Room1, but publisher detachment fails, the carrier departs during handoff, or the broker departs during handoff. `_complete_handoff()` runs the relevant recovery helper and returns at line 383 or 396. Because both returns occur before `_cleanup_room2()` at line 405, the Room2 pipeline and bot remain connected until Pipecat's idle timeout. The transfer audit continues to report `cleanup_pending=true` because `room2_name` was never cleared.
+- Cause: Room2 cleanup is placed only on the successful fall-through path. Neither `_recover_after_arrived_broker()` nor `_cleanup_after_carrier_departure()` owns Room2 cleanup, and the early-return branches do not use a `finally` block.
+- Fix: Put idempotent Room2 cleanup in a `finally` block around post-move completion, or call it explicitly after each recovery helper before returning. Preserve any unresolved cleanup state only when deletion actually fails.
+- Test: Parameterize media cleanup failure, carrier departure, and broker departure during handoff. Assert the Room2 pipeline is stopped, Room2 is deleted exactly once, `room2_name` is cleared, and the final audit has `cleanup_pending=false`.
+
+#### F18. Broker ringing and media readiness share one opaque timeout
+
+- Severity: Low
+- Label: suggestion
+- Location: `voice-agent/livekit_telephony_service.py:117`, `voice-agent/orchestrator.py:217`, `voice-agent/orchestrator.py:234`, `voice-agent/orchestrator.py:566`
+- Scenario: A broker line is busy, does not answer, rings for most of the configured 45 seconds, or fails because of a trunk problem. The SIP request supplies no `ringing_timeout`, while the orchestrator uses one 45-second deadline for both answer and subsequent media readiness. A late answer can therefore leave almost no media budget. Provider dial failures fall through `_failure_reason()` at line 573 to the exception class name, so busy, no-answer, and trunk faults are indistinguishable in the transfer audit.
+- Cause: The dial request sets only `wait_until_answered=True`; it does not bound provider ringing independently. The remaining media wait is calculated from the original dial deadline, and failure normalization recognizes only local timeout and move exception classes.
+- Fix: Configure an explicit provider ringing timeout, use separate bounded answer and media-readiness budgets, and map provider error codes to stable audit reasons such as `broker_busy`, `broker_no_answer`, and `broker_trunk_error` while retaining a sanitized provider code for operations.
+- Test: Cover busy, no-answer, late answer with slow media, and trunk failure. Assert independent timing budgets and distinct stable terminal reasons in the transfer audit.
 
 ## Normal-call parity
 
