@@ -179,7 +179,8 @@ class LiveAdapterTest(unittest.TestCase):
             with (
                 patch("evals.runner.ProductionContracts.load", return_value=object()),
                 patch("evals.runner._reproducibility", return_value={
-                    "git_commit": "abc", "tool_schemas_sha256": "schema",
+                    "git_commit": "abc", "git_dirty": True,
+                    "evals_tree_sha256": "evals", "tool_schemas_sha256": "schema",
                     "prompt_sha256": {"only": {"initial": "prompt"}},
                     "hash_algorithm": "sha256",
                 }),
@@ -207,7 +208,8 @@ class LiveAdapterTest(unittest.TestCase):
             {"scenario_id": "only", "passed": True, "checks": [], "trace_source": "conversation_runner"},
         ]
         repro = {
-            "git_commit": "abc", "tool_schemas_sha256": "schema",
+            "git_commit": "abc", "git_dirty": True,
+            "evals_tree_sha256": "evals", "tool_schemas_sha256": "schema",
             "prompt_sha256": {"only": {"initial": "prompt"}}, "hash_algorithm": "sha256",
         }
         with tempfile.TemporaryDirectory() as source, tempfile.TemporaryDirectory() as output:

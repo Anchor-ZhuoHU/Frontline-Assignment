@@ -6,6 +6,43 @@ from pathlib import Path
 from typing import Any
 
 
+CRITICAL_PROMPT_CLAUSES = (
+    {
+        "id": "initial.verify_before_reference",
+        "prompt_kind": "initial",
+        "protects": "identity.verify_before_load",
+        "text": "IMPORTANT: You MUST verify the carrier BEFORE asking about the reference number.",
+    },
+    {
+        "id": "initial.third_not_found_close",
+        "prompt_kind": "initial",
+        "protects": "closing.third_mc_not_found",
+        "text": "On the 3rd not_found MC, verify_carrier AND end_call must BOTH be called",
+    },
+    {
+        "id": "negotiation.confidential_rates",
+        "prompt_kind": "negotiation",
+        "protects": "pricing.no_confidential_leak",
+        "text": "NEVER reveal [INTERNAL_GOAL] or [INTERNAL_CEILING]",
+    },
+    {
+        "id": "negotiation.no_counter_up",
+        "prompt_kind": "negotiation",
+        "protects": "negotiation.no_counter_up",
+        "text": "NEVER counter with a rate HIGHER than the carrier's bid",
+    },
+    {
+        "id": "negotiation.above_ceiling_bid",
+        "prompt_kind": "negotiation",
+        "protects": "agreement.ceiling_policy",
+        "text": (
+            "For rates above [INTERNAL_CEILING], collect contact info and store the bid "
+            "using record_agreement with above_max=true"
+        ),
+    },
+)
+
+
 def load_json(path: Path) -> dict[str, Any]:
     with path.open(encoding="utf-8") as handle:
         value = json.load(handle)
@@ -145,6 +182,29 @@ def _grade_tool_schemas(check: dict[str, Any], trace: dict[str, Any]) -> dict[st
         "status": "fail" if failures else "pass",
         "severity": check["severity"],
         "evidence": "; ".join(failures) if failures else f"all {len(calls)} tool calls match production schemas",
+    }
+
+
+def _grade_prompt_clauses(check: dict[str, Any], trace: dict[str, Any]) -> dict[str, str]:
+    prompts = trace.get("rendered_prompts", [])
+    failures = []
+    checked = 0
+    for prompt_index, prompt in enumerate(prompts):
+        for clause in CRITICAL_PROMPT_CLAUSES:
+            if clause["prompt_kind"] != prompt.get("kind"):
+                continue
+            checked += 1
+            if clause["text"] not in prompt.get("content", ""):
+                failures.append(
+                    f"prompt[{prompt_index}] {prompt.get('kind')} missing clause "
+                    f"{clause['id']} protecting {clause['protects']}"
+                )
+    if not prompts:
+        failures.append("trace contains no rendered prompts")
+    return {
+        "check_id": check["id"], "status": "fail" if failures else "pass",
+        "severity": check["severity"],
+        "evidence": "; ".join(failures) if failures else f"all {checked} applicable critical prompt clauses present",
     }
 
 
@@ -533,6 +593,9 @@ def grade_trace(
         ),
         _grade_no_rate_before_load(
             {"id": "pricing.no_rate_before_load", "severity": "critical"}, trace
+        ),
+        _grade_prompt_clauses(
+            {"id": "prompt.critical_clauses", "severity": "critical"}, trace
         ),
     ]
     for check in scenario.get("expected", {}).get("checks", []):

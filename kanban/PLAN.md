@@ -44,7 +44,7 @@ The offline scripted model also validates critical prompt-contract clauses befor
 - Acceptance: fixed inputs produce stable hashes; reports contain no API key or unrelated environment data; trace filenames are deterministic and link back to scenario/run metadata; tests verify the header and trace inventory.
 - Test first: report-schema and output-bundle tests fail before implementation.
 
-## T4.2 · Critical prompt mutation sensitivity   tier: signature   status: todo
+## T4.2 · Critical prompt mutation sensitivity   tier: signature   status: done
 - Serves: R2-R4, R8-R9 (C1-C4)
 - Scope: define one evaluator-owned list of critical prompt clauses, each mapped to the behavioral check it protects; verify that list against every rendered initial and negotiation prompt as a default invariant, outside scripted-model steps. Exclude clauses already covered by `voice-agent/tests/test_voice_prompt_guardrails.py`. Add a test-only prompt transformation seam and delete each listed clause in turn.
 - Acceptance: every unmodified rendered prompt satisfies its applicable critical clauses; each single-clause mutation fails with the clause id and protected check in evidence; scenario scripts contain no prompt-clause assertions for this contract.

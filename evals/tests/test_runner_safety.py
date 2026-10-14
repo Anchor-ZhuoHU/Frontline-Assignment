@@ -8,6 +8,7 @@ from pathlib import Path
 
 from evals.contracts import ProductionContracts
 from evals.conversation import ScriptedModel, run_conversation
+from evals.grading import CRITICAL_PROMPT_CLAUSES, grade_trace
 from evals.runner import run_suite
 
 
@@ -25,15 +26,30 @@ class RunnerFailureContainmentTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.contracts = ProductionContracts.load(REPO_ROOT)
 
-    def test_broken_prompt_contract_is_trace_failure_not_exception(self) -> None:
-        scenario = copy.deepcopy(SCENARIO)
-        scenario["script"][0]["expect_system_contains"] = ["missing safety clause"]
+    def test_each_critical_prompt_clause_mutation_fails_default_invariant(self) -> None:
+        for clause in CRITICAL_PROMPT_CLAUSES:
+            with self.subTest(clause=clause["id"]):
+                initial_prompt = self.contracts.initial_prompt
+                negotiation_prompt = self.contracts.negotiation_prompt
+                if clause["prompt_kind"] == "initial":
+                    initial_prompt = lambda *args, _base=initial_prompt, _text=clause["text"], **kwargs: _base(*args, **kwargs).replace(_text, "", 1)
+                else:
+                    negotiation_prompt = lambda *args, _base=negotiation_prompt, _text=clause["text"], **kwargs: _base(*args, **kwargs).replace(_text, "", 1)
+                contracts = ProductionContracts(
+                    initial_prompt=initial_prompt,
+                    negotiation_prompt=negotiation_prompt,
+                    room1_tools=self.contracts.room1_tools,
+                )
+                scenario = copy.deepcopy(SCENARIO)
 
-        trace = run_conversation(scenario, ScriptedModel(scenario["script"]), self.contracts)
+                trace = run_conversation(scenario, ScriptedModel(scenario["script"]), contracts)
+                result = grade_trace(scenario, trace)
 
-        self.assertEqual(trace["meta"]["status"], "error")
-        error = next(e for e in trace["events"] if e["type"] == "runner_error")
-        self.assertIn("missing safety clause", error["detail"])
+                self.assertEqual(trace["meta"]["status"], "completed")
+                self.assertFalse(result["passed"])
+                check = next(c for c in result["checks"] if c["check_id"] == "prompt.critical_clauses")
+                self.assertIn(clause["id"], check["evidence"])
+                self.assertIn(clause["protects"], check["evidence"])
 
     def test_unknown_tool_is_trace_failure_with_call_evidence(self) -> None:
         scenario = copy.deepcopy(SCENARIO)

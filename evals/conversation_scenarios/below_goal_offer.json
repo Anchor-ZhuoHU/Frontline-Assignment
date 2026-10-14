@@ -31,7 +31,6 @@
   },
   "script": [
     {
-      "expect_system_contains": ["MANDATORY TOOL-CALL RULE"],
       "text": "Let me check that.",
       "tool_calls": [{"id": "verify-1", "name": "verify_carrier", "args": {"mc_number": "123456"}}]
     },
@@ -41,7 +40,6 @@
       "tool_calls": [{"id": "load-1", "name": "get_load_context", "args": {"load_id": "LOAD-300"}}]
     },
     {
-      "expect_system_contains": ["NEVER counter with a rate HIGHER"],
       "expect_last_tool_result": {"status": "success"},
       "text": "I've got LOAD-300 from Chicago to Dallas. This lane is going for $1500."
     },

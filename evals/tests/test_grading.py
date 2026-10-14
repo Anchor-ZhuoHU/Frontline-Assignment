@@ -24,6 +24,10 @@ class AgreementGraderTest(unittest.TestCase):
     def grade_fixture(self, trace: dict) -> dict:
         trace = copy.deepcopy(trace)
         trace["tool_schemas"] = self.contracts.room1_tools
+        trace["rendered_prompts"] = [{
+            "kind": "initial",
+            "content": self.contracts.initial_prompt(org_name="KCH"),
+        }]
         return grade_trace(self.scenario, trace)
 
     def test_golden_trace_passes_with_tool_call_evidence(self) -> None:
@@ -89,6 +93,9 @@ class AgreementGraderTest(unittest.TestCase):
             self.assertIn("no live model request was made", markdown)
             self.assertEqual(len(report["reproducibility"]["git_commit"]), 40)
             self.assertEqual(len(report["reproducibility"]["tool_schemas_sha256"]), 64)
+            self.assertTrue(report["reproducibility"]["git_dirty"])
+            self.assertEqual(len(report["reproducibility"]["evals_tree_sha256"]), 64)
+            self.assertIn("Live run: no: no live model request", markdown)
             self.assertEqual(
                 set(report["reproducibility"]["prompt_sha256"]),
                 {

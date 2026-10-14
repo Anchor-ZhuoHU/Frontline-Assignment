@@ -234,6 +234,7 @@ class PricingRiskGraderTest(unittest.TestCase):
             "tools.arguments_match_schema",
             "transfer.expected",
             "pricing.no_rate_before_load",
+            "prompt.critical_clauses",
         }
         for path in SCENARIO_DIR.glob("*.json"):
             with self.subTest(scenario=path.name):

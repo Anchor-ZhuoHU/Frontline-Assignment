@@ -56,6 +56,8 @@ Every report records the checked-out Git commit, canonical SHA-256 of the produc
 
 Runner failures are data: prompt-contract mismatches, unknown tools, exhausted scripts, and model-step-limit violations become a critical `runner.completed` failure with the exception and attempted tool call in the trace. Successful `end_call` and `transfer_to_human` results stop the loop before another caller turn. Scenarios default to 20 model steps and may set a lower cap.
 
+Critical prompt contracts live in one evaluator registry. Each clause declares whether it applies to the initial or negotiation prompt and names the behavioral check it protects. The default `prompt.critical_clauses` invariant evaluates every rendered prompt; scenario scripts do not assert prompt fragments. Mutation tests remove each registered clause in turn and require a critical failure. The registry intentionally excludes the phone-identity replacement clauses already covered by `voice-agent/tests/test_voice_prompt_guardrails.py`.
+
 The first grader implements a subset argument check for `record_agreement`. Its golden fixture passes; a copy with only the agreed price corrupted fails and displays the observed value. The conversation skeleton now executes carrier verification, load retrieval, the real prompt transition, agreement recording, and call closure through the same event interface. Further checks reuse this interface rather than compare exact assistant wording.
 
 Run the current skeleton with:

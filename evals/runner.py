@@ -36,7 +36,7 @@ def _markdown(report: dict[str, Any]) -> str:
         (
             "- Live run: yes"
             if report["execution"]["live_run_occurred"]
-            else "- Live run: no — no live model request was made for this report"
+            else "- Live run: no: no live model request was made for this report"
         ),
         f"- Model: {report['execution']['model']}",
         (
@@ -47,6 +47,8 @@ def _markdown(report: dict[str, Any]) -> str:
         f"- k: {report['execution']['k']}",
         f"- Gate policy: {report['execution']['gate_policy']}",
         f"- Git commit: {report['reproducibility']['git_commit']}",
+        f"- Git tree dirty: {str(report['reproducibility']['git_dirty']).lower()}",
+        f"- Evals tree SHA-256: {report['reproducibility']['evals_tree_sha256']}",
         f"- Tool schemas SHA-256: {report['reproducibility']['tool_schemas_sha256']}",
         f"- Scenarios: {summary['scenarios']}",
         f"- Passed: {summary['passed']}",
@@ -121,6 +123,31 @@ def _git_commit(repo_root: Path) -> str:
     return completed.stdout.strip()
 
 
+def _git_dirty(repo_root: Path) -> bool:
+    completed = subprocess.run(
+        ["git", "-c", f"safe.directory={repo_root}", "status", "--porcelain", "--untracked-files=all"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return bool(completed.stdout.strip())
+
+
+def _evals_tree_hash(evals_dir: Path) -> str:
+    digest = hashlib.sha256()
+    paths = sorted(
+        path for path in evals_dir.rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
+    )
+    for path in paths:
+        digest.update(path.relative_to(evals_dir).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
 def _reproducibility(
     repo_root: Path,
     contracts: ProductionContracts,
@@ -146,6 +173,8 @@ def _reproducibility(
     )
     return {
         "git_commit": _git_commit(repo_root),
+        "git_dirty": _git_dirty(repo_root),
+        "evals_tree_sha256": _evals_tree_hash(repo_root / "evals"),
         "tool_schemas_sha256": _sha256(canonical_schemas),
         "prompt_sha256": prompt_hashes,
         "hash_algorithm": "sha256",

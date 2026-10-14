@@ -34,10 +34,6 @@ class ScriptedModel:
         step = self._script[self._index]
         self._index += 1
 
-        system_prompt = messages[0].get("content", "")
-        for fragment in step.get("expect_system_contains", []):
-            if fragment not in system_prompt:
-                raise AssertionError(f"production system prompt is missing {fragment!r}")
         expected_tools = step.get("expect_tools")
         if expected_tools is not None:
             observed = [tool["function"]["name"] for tool in tools]
@@ -171,6 +167,7 @@ def run_conversation(
     tool_names = {tool["function"]["name"] for tool in contracts.room1_tools}
     system_prompt = contracts.initial_prompt(org_name=scenario.get("org_name"))
     messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+    rendered_prompts = [{"kind": "initial", "content": system_prompt}]
     events: list[dict[str, Any]] = []
     fake_tools = FakeTools(scenario, contracts)
     next_t_ms = 0
@@ -223,6 +220,9 @@ def run_conversation(
                     result, replacement_prompt = fake_tools.call(name, args)
                     if replacement_prompt is not None:
                         messages[0] = {"role": "system", "content": replacement_prompt}
+                        rendered_prompts.append(
+                            {"kind": "negotiation", "content": replacement_prompt}
+                        )
                         event("system_prompt_changed", prompt=replacement_prompt)
                     messages.append(
                         {
@@ -254,6 +254,7 @@ def run_conversation(
         "schema_version": 1,
         "scenario_id": scenario["id"],
         "tool_schemas": copy.deepcopy(contracts.room1_tools),
+        "rendered_prompts": rendered_prompts,
         "meta": {
             "runner_level": "text_conversation",
             "model": model.model_id,
