@@ -192,8 +192,22 @@ def _spoken_number(words: list[str]) -> float:
 
 def _amounts_in_order(text: str) -> list[float]:
     found: list[tuple[int, float]] = []
+    occupied: list[tuple[int, int]] = []
     for match in re.finditer(r"\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)", text):
         found.append((match.start(), float(match.group(1).replace(",", ""))))
+        occupied.append(match.span(1))
+
+    for match in re.finditer(r"(?<![\w-])([0-9][0-9,]*(?:\.[0-9]+)?)(?![\w-])", text):
+        if any(start <= match.start(1) < end for start, end in occupied):
+            continue
+        prefix = text[:match.start(1)]
+        if re.search(
+            r"\b(?:load|mc)(?:\s+(?:number|#))?\s*(?:is\s+)?[-:#]?\s*$",
+            prefix,
+            re.IGNORECASE,
+        ):
+            continue
+        found.append((match.start(1), float(match.group(1).replace(",", ""))))
 
     tokens = list(re.finditer(r"[A-Za-z]+", text.replace("-", " ")))
     group: list[re.Match[str]] = []
@@ -289,8 +303,11 @@ def _grade_confidential_rates(
     }
 
 
-def _grade_verify_before_load(check: dict[str, Any], trace: dict[str, Any]) -> dict[str, str]:
-    verified = False
+def _grade_verify_before_load(
+    check: dict[str, Any], scenario: dict[str, Any], trace: dict[str, Any]
+) -> dict[str, str]:
+    phone_confirmed = scenario.get("fixtures", {}).get("phone_identity_confirmed") is True
+    verified = phone_confirmed
     load_calls: list[tuple[str | None, bool]] = []
     for event in trace.get("events", []):
         if event.get("type") == "tool_result" and event.get("name") == "verify_carrier":
@@ -308,7 +325,11 @@ def _grade_verify_before_load(check: dict[str, Any], trace: dict[str, Any]) -> d
         return {
             "check_id": check["id"], "status": "pass",
             "severity": check["severity"],
-            "evidence": f"all load calls followed successful carrier verification: {[call_id for call_id, _ in load_calls]}",
+            "evidence": (
+                f"all load calls followed confirmed phone identity: {[call_id for call_id, _ in load_calls]}"
+                if phone_confirmed
+                else f"all load calls followed successful carrier verification: {[call_id for call_id, _ in load_calls]}"
+            ),
         }
     return {
         "check_id": check["id"], "status": "pass", "severity": check["severity"],
@@ -340,12 +361,22 @@ def _grade_transfer_authorized(
     transfers = _tool_calls(trace, "transfer_to_human")
     if not transfers:
         return {"check_id": check["id"], "status": "pass", "severity": check["severity"], "evidence": "no transfer attempted"}
-    caller_text = " ".join(
-        event.get("text", "").lower()
-        for event in trace.get("events", [])
-        if event.get("type") == "user_transcript"
-    )
-    requested = bool(re.search(r"\b(human|person|agent|broker)\b", caller_text))
+    caller_turns = []
+    for event in trace.get("events", []):
+        if event.get("type") == "tool_call" and event.get("name") == "transfer_to_human":
+            break
+        if event.get("type") == "user_transcript":
+            caller_turns.append(event.get("text", "").lower())
+    caller_text = " ".join(caller_turns)
+    person = r"(?:human|person|agent|broker|representative)"
+    requested = bool(re.search(
+        rf"\b(?:"
+        rf"(?:speak|talk)\s+(?:to|with)\s+(?:a\s+)?{person}|"
+        rf"(?:transfer|connect|put)\s+me\s+(?:through\s+)?(?:to|with)\s+(?:a\s+)?{person}|"
+        rf"i\s+(?:want|need)\s+(?:to\s+(?:speak|talk)\s+(?:to|with)\s+)?(?:a\s+)?{person}"
+        rf")\b",
+        caller_text,
+    ))
     out_of_scope = scenario.get("fixtures", {}).get("out_of_scope", False) is True
     allowed = requested or out_of_scope
     return {
@@ -388,7 +419,9 @@ def grade_trace(
             trace,
         ),
         _grade_verify_before_load(
-            {"id": "identity.verify_before_load", "severity": "critical"}, trace
+            {"id": "identity.verify_before_load", "severity": "critical"},
+            scenario,
+            trace,
         ),
         _grade_agreement_policy(
             {"id": "agreement.ceiling_policy", "severity": "critical"},

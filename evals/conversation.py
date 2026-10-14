@@ -128,10 +128,20 @@ class FakeTools:
                 "negotiation_id": "fake-negotiation-1",
             }, None
         if name == "end_call":
-            self.state["end_reason"] = args.get("reason")
+            valid_reasons = [
+                "abrupt", "agreement", "no_agreement", "error",
+                "load_not_found", "mc_not_found", "bid_placed",
+            ]
+            reason = args.get("reason")
+            if not reason or reason not in valid_reasons:
+                return {
+                    "status": "error",
+                    "message": f"Invalid reason. Must be one of: {', '.join(valid_reasons)}",
+                }, None
+            self.state["end_reason"] = reason
             return {
                 "status": "success",
-                "message": f"Call ending with reason: {args.get('reason')}",
+                "message": f"Call ending with reason: {reason}",
             }, None
         if name == "transfer_to_human":
             if self.state["loaded_reference"] is None:
