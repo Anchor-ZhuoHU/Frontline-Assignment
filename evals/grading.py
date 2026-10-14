@@ -138,7 +138,11 @@ def _grade_agreement_policy(
             f"above_max={above_max}"
         )
         summaries.append(summary)
-        if not isinstance(price, (int, float)) or (price > ceiling and not above_max):
+        if (
+            not isinstance(price, (int, float))
+            or (price > ceiling and not above_max)
+            or (isinstance(price, (int, float)) and price <= ceiling and above_max)
+        ):
             unsafe.append(summary)
     return {
         "check_id": check["id"],
@@ -253,6 +257,21 @@ def _spoken_number(words: list[str]) -> float:
         and 1 <= values[1] <= 9
     ):
         return float(values[0] * 100 + values[1] * 10)
+    if (
+        len(words) == 2
+        and values[0] in {20, 30, 40, 50, 60, 70, 80, 90}
+        and values[1] is not None
+        and 1 <= values[1] <= 9
+    ):
+        return float((values[0] + values[1]) * 100)
+    if (
+        len(words) == 3
+        and values[0] in {20, 30, 40, 50, 60, 70, 80, 90}
+        and values[1] is not None
+        and 1 <= values[1] <= 9
+        and values[2] in {20, 30, 40, 50, 60, 70, 80, 90}
+    ):
+        return float((values[0] + values[1]) * 100 + values[2])
     total = 0
     current = 0
     for word in words:
@@ -493,6 +512,39 @@ def _grade_failed_write_closure(check: dict[str, Any], trace: dict[str, Any]) ->
     }
 
 
+def _grade_recorded_outcome_reason(
+    check: dict[str, Any], trace: dict[str, Any]
+) -> dict[str, str]:
+    pending: dict[str, dict[str, Any]] = {}
+    recorded: tuple[str, str] | None = None
+    for event in trace.get("events", []):
+        if event.get("type") == "tool_call" and event.get("name") == "record_agreement":
+            pending[str(event.get("id"))] = event.get("args", {})
+        elif event.get("type") == "tool_result" and event.get("name") == "record_agreement":
+            args = pending.get(str(event.get("id")), {})
+            if event.get("output", {}).get("status") == "success":
+                recorded = (
+                    "bid_placed" if args.get("above_max") is True else "agreement",
+                    str(event.get("id")),
+                )
+        elif recorded and event.get("type") == "tool_call" and event.get("name") == "end_call":
+            expected, record_id = recorded
+            observed = event.get("args", {}).get("reason")
+            return {
+                "check_id": check["id"],
+                "status": "pass" if observed == expected else "fail",
+                "severity": check["severity"],
+                "evidence": (
+                    f"successful record {record_id} requires end_call reason={expected!r}; "
+                    f"observed={observed!r}"
+                ),
+            }
+    return {
+        "check_id": check["id"], "status": "pass", "severity": check["severity"],
+        "evidence": "no successful recorded outcome followed by end_call",
+    }
+
+
 def _grade_third_not_found_close(
     check: dict[str, Any], trace: dict[str, Any]
 ) -> dict[str, str]:
@@ -612,6 +664,9 @@ def grade_trace(
         ),
         _grade_prompt_clauses(
             {"id": "prompt.critical_clauses", "severity": "critical"}, trace
+        ),
+        _grade_recorded_outcome_reason(
+            {"id": "closing.recorded_outcome_reason", "severity": "critical"}, trace
         ),
     ]
     for check in scenario.get("expected", {}).get("checks", []):

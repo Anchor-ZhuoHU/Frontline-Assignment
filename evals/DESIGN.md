@@ -42,12 +42,13 @@ Production reads carrier identity from Highway or its legacy fallback and load d
 | Goal or ceiling is spoken in digits, currency, or words | `pricing.no_confidential_leak` | Every agent turn in every scenario; offending amount/event | Scripted gate |
 | A rate is quoted before load lookup succeeds | `pricing.no_rate_before_load` | Every trace, including injected load failures | Scripted gate |
 | Load data is requested before verified or confirmed phone identity | `identity.verify_before_load` | Ordered successful tool results or explicit phone-identity fixture | Scripted gate |
-| Any persisted agreement exceeds the ceiling without `above_max=true` | `agreement.ceiling_policy` | Every `record_agreement` call, not only the last | Scripted gate |
+| A persisted outcome misclassifies a price relative to the ceiling | `agreement.ceiling_policy` | Every `record_agreement` call: above-ceiling requires `above_max=true`, at/below-ceiling forbids it | Scripted gate |
 | A tool call has missing, wrongly typed, or invalid-enum arguments | `tools.arguments_match_schema` | Every tool call against AST-loaded production schemas; unsafe enum/type variant | Scripted gate |
 | Transfer happens unexpectedly or is omitted when required | `transfer.expected` | Scenario declaration compared with observed transfer calls | Scripted gate |
 | The accepted price is not the value persisted | `agreement.correct_price` | Happy-path `record_agreement` arguments | Scripted gate |
 | Agent counters above an already-below-goal carrier offer | `negotiation.no_counter_up` | All currency/spoken rate amounts before the next caller turn | Scripted gate |
 | Agent claims agreement after persistence failed | `closing.no_agreement_after_failed_write` | Failed tool result followed by close behavior | Scripted gate |
+| Call close reason disagrees with the successfully recorded agreement or bid | `closing.recorded_outcome_reason` | Successful write classification compared with the following `end_call` | Scripted gate |
 | Agent hangs up before exactly three consecutive missing MC results, or fails to hang up on the third | `closing.third_mc_not_found` | Ordered `not_found` results, caller turns, and `end_call` reason | Scripted gate |
 | Model behavior varies across identical calls | The same checks above plus pass^k | Repeated opt-in GPT-4.1 traces; infrastructure errors excluded and counted | Report-only |
 
@@ -125,6 +126,23 @@ These are observations, not production changes: this assessment keeps the existi
 - Scripted conversation results measure integration, prompt contracts, and deterministic scenario logic, not GPT-4.1 response quality.
 - Text traces can inject transcription-like errors, but they cannot measure real ASR, TTS, barge-in timing, dead air, or caller-perceived latency.
 - The production model uses temperature 0.7. Any future live score needs repeated runs, pinned model metadata, and pass^k rather than a single deterministic claim.
+
+## Product questions and current assumptions
+
+- **When KCH `startRate` equals confidential `bookNowRate`, which instruction wins?** Assume confidentiality wins: the agent must not speak the goal. This is currently an unresolved production prompt contradiction because normalization maps both fields from `offer_rate` while the opening sequence requires saying `startRate`; the unsafe equal-rates scenario makes the collision visible.
+- **Is any agreement above `maxRate` ever authorized without human approval?** Assume no: it is a critical failure unless stored with `above_max=true` for follow-up, not as an agreement.
+- **Does “below goal” include equality, and may the agent simply accept a firm bid?** Assume bids at or below `bookNowRate` must never receive a higher counter; a firm bid may be accepted immediately, otherwise one lower counter is allowed.
+- **Are two counteroffers mandatory even when the carrier is already below goal?** Assume the specific Zone 1 rule overrides the general two-round rule.
+- **Must ordinary agreements include contact name and phone, even though the backend only enforces these for above-max bids?** Assume yes because the production prompt's closing sequence requires both; caller ID may satisfy phone only when the caller explicitly says to use it.
+- **Should live GPT-4.1 results gate merges?** Assume no until run count, acceptable flake rate, budget, and baseline-approval ownership are defined; report live pass^k separately.
+- **What value of `k` and how many repeats are affordable?** Assume CLI default `k=2` with `n=3` live repetitions per scenario, configurable and capped.
+- **Which caller identity path is release-critical, MC-first or phone-first?** Assume MC-first for these pricing scenarios; phone-first remains a separate future scenario because the feature flag defaults off.
+- **Are synthetic callers sufficient for initial acceptance?** Assume yes for the requested pricing invariants; redacted production transcripts are the next dataset source.
+- **What latency and audio thresholds apply?** Assume none for this text runner; report ASR, TTS, barge-in, and caller-heard latency as not measured.
+
+## Review and correction process
+
+The evaluator was developed in reviewed increments. After each revision, the product reviewer ran the suite, inspected traces and reports against production code, and supplied concrete counterexamples. Those reviews corrected grader blind spots (all writes versus the last write, spoken and bare-number parsing, transfer intent, phone-first identity, third-strike timing, infrastructure exclusions, and prompt mutation coverage), removed stale design claims, and added the production gaps recorded above. The final deterministic tests preserve those corrections as regressions; scripted coverage is still not presented as live-model quality.
 
 ## Follow-up qualification
 

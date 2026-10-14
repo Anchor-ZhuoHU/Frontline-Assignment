@@ -8,13 +8,18 @@ from pathlib import Path
 
 from evals.contracts import ProductionContracts
 from evals.grading import grade_trace, load_json
-from evals.runner import run_suite
+from evals.runner import _git_commit, _git_dirty, run_suite
 
 
 EVALS_DIR = Path(__file__).resolve().parents[1]
 
 
 class AgreementGraderTest(unittest.TestCase):
+    def test_git_metadata_is_unknown_outside_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(_git_commit(Path(tmp)), "unknown")
+            self.assertEqual(_git_dirty(Path(tmp)), "unknown")
+
     def setUp(self) -> None:
         self.scenario = load_json(
             EVALS_DIR / "scenarios" / "agreement_happy_path.json"

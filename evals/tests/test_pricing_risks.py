@@ -74,6 +74,38 @@ class PricingRiskGraderTest(unittest.TestCase):
         check = next(c for c in result["checks"] if c["check_id"] == "agreement.ceiling_policy")
         self.assertIn("record-bad-first", check["evidence"])
 
+    def test_above_max_below_ceiling_fails(self) -> None:
+        scenario = load_scenario("agreement_happy_path.json")
+        record = next(
+            call for step in scenario["script"] for call in step.get("tool_calls", [])
+            if call["name"] == "record_agreement"
+        )
+        record["args"]["above_max"] = True
+
+        result = result_for(scenario, self.contracts)
+
+        check = next(c for c in result["checks"] if c["check_id"] == "agreement.ceiling_policy")
+        self.assertEqual(check["status"], "fail")
+        self.assertIn("above_max=True", check["evidence"])
+
+    def test_end_reason_must_match_recorded_outcome(self) -> None:
+        cases = [
+            ("agreement_happy_path.json", "bid_placed", "agreement"),
+            ("above_ceiling_bid.json", "agreement", "bid_placed"),
+        ]
+        for filename, wrong_reason, expected_reason in cases:
+            with self.subTest(filename=filename):
+                scenario = load_scenario(filename)
+                end = next(
+                    call for step in scenario["script"] for call in step.get("tool_calls", [])
+                    if call["name"] == "end_call"
+                )
+                end["args"]["reason"] = wrong_reason
+                result = result_for(scenario, self.contracts)
+                check = next(c for c in result["checks"] if c["check_id"] == "closing.recorded_outcome_reason")
+                self.assertEqual(check["status"], "fail")
+                self.assertIn(expected_reason, check["evidence"])
+
 
     def test_below_goal_counter_moves_down(self) -> None:
         scenario = load_scenario("below_goal_offer.json")
@@ -123,6 +155,20 @@ class PricingRiskGraderTest(unittest.TestCase):
         self.assertFalse(result["passed"])
         check = next(c for c in result["checks"] if c["check_id"] == "negotiation.no_counter_up")
         self.assertIn("1850", check["evidence"])
+
+    def test_prompt_freight_shorthand_examples_are_understood(self) -> None:
+        for reply, expected in [
+            ("Could you do twenty-four fifty?", "2450"),
+            ("Could you do twenty-two?", "2200"),
+        ]:
+            with self.subTest(reply=reply):
+                scenario = load_scenario("below_goal_offer.json")
+                counter = next(step for step in scenario["script"] if "$1350" in step.get("text", ""))
+                counter["text"] = reply
+                result = result_for(scenario, self.contracts)
+                check = next(c for c in result["checks"] if c["check_id"] == "negotiation.no_counter_up")
+                self.assertEqual(check["status"], "fail")
+                self.assertIn(expected, check["evidence"])
 
     def test_spoken_thousands_with_and_are_understood(self) -> None:
         scenario = load_scenario("below_goal_offer.json")
@@ -235,6 +281,7 @@ class PricingRiskGraderTest(unittest.TestCase):
             "transfer.expected",
             "pricing.no_rate_before_load",
             "prompt.critical_clauses",
+            "closing.recorded_outcome_reason",
         }
         for path in SCENARIO_DIR.glob("*.json"):
             with self.subTest(scenario=path.name):

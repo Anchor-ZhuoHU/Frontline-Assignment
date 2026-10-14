@@ -4,7 +4,7 @@
 > prompt builders and tool schemas with in-memory fake tools. This does not
 > measure current live-model or audio quality.
 
-- Generated: 2026-10-14T00:55:33.201324+00:00
+- Generated: 2026-10-14T01:10:12.390213+00:00
 - Runner level: text_conversation
 - Live run: no: no live model request was made for this report
 - Model: scripted
@@ -14,7 +14,7 @@
 - Gate policy: gating deterministic critical and major checks
 - Git commit: 5a98a66274322954a0a6255f54650eec6e50c41d
 - Git tree dirty: true
-- Evals tree SHA-256: ebc505113217e3e5f2e1d387f098c1b2996458faea781e5cb79bd66578847f26
+- Evals tree SHA-256: d9f2099ed369ccd5aeb6f7a20f8b781abfbc6d706dd124c36a039bca43932366
 - Tool schemas SHA-256: f3163d37c72fee701cc8c853e3164a6fb06aab16a260bf104a865581e203a434
 - Scenarios: 6
 - Passed: 6
@@ -41,6 +41,7 @@
 - transfer.expected [critical]: pass, transfer not expected and none observed
 - pricing.no_rate_before_load [critical]: pass, no money quoted before successful load lookup
 - prompt.critical_clauses [critical]: pass, all 7 applicable critical prompt clauses present
+- closing.recorded_outcome_reason [critical]: pass, successful record record-1 requires end_call reason='bid_placed'; observed='bid_placed'
 
 ### conversation_agreement_happy_path: PASS
 
@@ -52,6 +53,7 @@
 - transfer.expected [critical]: pass, transfer not expected and none observed
 - pricing.no_rate_before_load [critical]: pass, no money quoted before successful load lookup
 - prompt.critical_clauses [critical]: pass, all 7 applicable critical prompt clauses present
+- closing.recorded_outcome_reason [critical]: pass, successful record record-1 requires end_call reason='agreement'; observed='agreement'
 - agreement.correct_price [critical]: pass, tool call record-1 args={'agreed_price': 1650, 'carrier_contact_name': 'Alex', 'carrier_contact_phone': ''}
 
 ### below_goal_offer: PASS
@@ -64,6 +66,7 @@
 - transfer.expected [critical]: pass, transfer not expected and none observed
 - pricing.no_rate_before_load [critical]: pass, no money quoted before successful load lookup
 - prompt.critical_clauses [critical]: pass, all 7 applicable critical prompt clauses present
+- closing.recorded_outcome_reason [critical]: pass, successful record record-1 requires end_call reason='agreement'; observed='agreement'
 - negotiation.no_counter_up [critical]: pass, all agent amounts after carrier offer=1400 are at or below it: [1350.0]
 
 ### record_agreement_failure: PASS
@@ -76,6 +79,7 @@
 - transfer.expected [critical]: pass, transfer not expected and none observed
 - pricing.no_rate_before_load [critical]: pass, no money quoted before successful load lookup
 - prompt.critical_clauses [critical]: pass, all 7 applicable critical prompt clauses present
+- closing.recorded_outcome_reason [critical]: pass, no successful recorded outcome followed by end_call
 - closing.no_agreement_after_failed_write [critical]: pass, record_agreement failed; subsequent end_call reason='error'
 
 ### requested_transfer: PASS
@@ -88,6 +92,7 @@
 - transfer.expected [critical]: pass, transfer expected and observed: transfer-1
 - pricing.no_rate_before_load [critical]: pass, no money quoted before successful load lookup
 - prompt.critical_clauses [critical]: pass, all 7 applicable critical prompt clauses present
+- closing.recorded_outcome_reason [critical]: pass, no successful recorded outcome followed by end_call
 
 ### third_mc_not_found: PASS
 
@@ -99,6 +104,7 @@
 - transfer.expected [critical]: pass, transfer not expected and none observed
 - pricing.no_rate_before_load [critical]: pass, no money quoted before successful load lookup
 - prompt.critical_clauses [critical]: pass, all 2 applicable critical prompt clauses present
+- closing.recorded_outcome_reason [critical]: pass, no successful recorded outcome followed by end_call
 - closing.third_mc_not_found [critical]: pass, end call end-mc-3 followed exactly three not_found results without another caller turn
 
 ## Not measured

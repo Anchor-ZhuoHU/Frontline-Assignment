@@ -116,22 +116,22 @@ def _git_commit(repo_root: Path) -> str:
     completed = subprocess.run(
         ["git", "-c", f"safe.directory={repo_root}", "rev-parse", "HEAD"],
         cwd=repo_root,
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
     )
-    return completed.stdout.strip()
+    return completed.stdout.strip() if completed.returncode == 0 else "unknown"
 
 
-def _git_dirty(repo_root: Path) -> bool:
+def _git_dirty(repo_root: Path) -> bool | str:
     completed = subprocess.run(
         ["git", "-c", f"safe.directory={repo_root}", "status", "--porcelain", "--untracked-files=all"],
         cwd=repo_root,
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
     )
-    return bool(completed.stdout.strip())
+    return bool(completed.stdout.strip()) if completed.returncode == 0 else "unknown"
 
 
 def _evals_tree_hash(evals_dir: Path) -> str:
