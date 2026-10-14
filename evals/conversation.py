@@ -76,6 +76,7 @@ class FakeTools:
     ) -> None:
         self._scenario = scenario
         self._contracts = contracts
+        self._fixture_result_indexes: dict[str, int] = {}
         self.state: dict[str, Any] = {
             "verified_carrier": None,
             "loaded_reference": None,
@@ -87,6 +88,11 @@ class FakeTools:
 
     def call(self, name: str, args: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
         fixtures = self._scenario["fixtures"]
+        injected_results = fixtures.get("tool_results", {}).get(name, [])
+        injected_index = self._fixture_result_indexes.get(name, 0)
+        if injected_index < len(injected_results):
+            self._fixture_result_indexes[name] = injected_index + 1
+            return copy.deepcopy(injected_results[injected_index]), None
         if name == "verify_carrier":
             carrier = fixtures["carrier"]
             if str(args.get("mc_number")) != str(carrier["mc_number"]):

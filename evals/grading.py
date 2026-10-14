@@ -225,6 +225,65 @@ def _amounts_in_order(text: str, *, include_bare_digits: bool = False) -> list[f
     return [amount for _, amount in sorted(found)]
 
 
+def _money_amounts_in_order(text: str) -> list[float]:
+    found: list[tuple[int, float]] = []
+    occupied: list[tuple[int, int]] = []
+    for match in re.finditer(r"\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)", text):
+        found.append((match.start(), float(match.group(1).replace(",", ""))))
+        occupied.append(match.span(1))
+    for match in re.finditer(
+        r"(?<![\w-])([0-9][0-9,]*(?:\.[0-9]+)?)\s+dollars?\b",
+        text,
+        re.IGNORECASE,
+    ):
+        if not any(start <= match.start(1) < end for start, end in occupied):
+            found.append((match.start(1), float(match.group(1).replace(",", ""))))
+
+    tokens = list(re.finditer(r"[A-Za-z]+", text.replace("-", " ")))
+    recognized = set(_NUMBER_WORDS) | {"hundred", "thousand", "and"}
+    for index, token in enumerate(tokens):
+        if token.group(0).lower() not in {"dollar", "dollars"}:
+            continue
+        group: list[re.Match[str]] = []
+        cursor = token.start()
+        for previous in reversed(tokens[:index]):
+            if text.replace("-", " ")[previous.end():cursor].strip():
+                break
+            if previous.group(0).lower() not in recognized:
+                break
+            group.append(previous)
+            cursor = previous.start()
+        if group:
+            group.reverse()
+            words = [item.group(0).lower() for item in group]
+            found.append((group[0].start(), _spoken_number(words)))
+    return [amount for _, amount in sorted(found)]
+
+
+def _grade_no_rate_before_load(check: dict[str, Any], trace: dict[str, Any]) -> dict[str, str]:
+    load_succeeded = False
+    for event in trace.get("events", []):
+        if event.get("type") == "tool_result" and event.get("name") == "get_load_context":
+            if event.get("output", {}).get("status") == "success":
+                load_succeeded = True
+        if event.get("type") == "agent_text" and not load_succeeded:
+            amounts = _money_amounts_in_order(event.get("text", ""))
+            if amounts:
+                return {
+                    "check_id": check["id"], "status": "fail",
+                    "severity": check["severity"],
+                    "evidence": (
+                        f"agent quoted money {amounts} before successful load lookup "
+                        f"at t_ms={event.get('t_ms')}: {event.get('text', '')!r}"
+                    ),
+                }
+    return {
+        "check_id": check["id"], "status": "pass",
+        "severity": check["severity"],
+        "evidence": "no money quoted before successful load lookup",
+    }
+
+
 def _grade_counter_direction(
     check: dict[str, Any], trace: dict[str, Any]
 ) -> dict[str, str]:
@@ -428,6 +487,9 @@ def grade_trace(
         ),
         _grade_expected_transfer(
             {"id": "transfer.expected", "severity": "critical"}, scenario, trace
+        ),
+        _grade_no_rate_before_load(
+            {"id": "pricing.no_rate_before_load", "severity": "critical"}, trace
         ),
     ]
     for check in scenario.get("expected", {}).get("checks", []):

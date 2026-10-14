@@ -79,8 +79,8 @@ class AgreementGraderTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             report = run_suite(EVALS_DIR, Path(tmp))
 
-            self.assertEqual(report["summary"]["scenarios"], 5)
-            self.assertEqual(report["summary"]["passed"], 5)
+            self.assertEqual(report["summary"]["scenarios"], 6)
+            self.assertEqual(report["summary"]["passed"], 6)
             self.assertTrue((Path(tmp) / "report.json").is_file())
             markdown = (Path(tmp) / "report.md").read_text(encoding="utf-8")
             self.assertIn("agreement_happy_path", markdown)

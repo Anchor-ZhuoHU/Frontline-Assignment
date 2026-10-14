@@ -26,7 +26,7 @@ The offline scripted model also validates critical prompt-contract clauses befor
 - Acceptance: safe scripted traces pass; each requested defect produces a critical failure with the offending amount and event id; the runner, not hand-authored traces, produces the evaluated traces.
 - Test first: each deliberately unsafe scripted response reaches the grader and fails for the intended pricing rule.
 
-## T3.1 · Production-shaped fault injection and lookup grounding   tier: signature   status: todo
+## T3.1 · Production-shaped fault injection and lookup grounding   tier: signature   status: done
 - Serves: R2-R4, R6-R9 (C1-C4)
 - Scope: allow scenario fixtures to make `verify_carrier` return `not_found` or production-shaped `error` results and make `get_load_context` return production-shaped failures; add the third-consecutive-`not_found` MC flow from `voice_prompt.py:327`, requiring `end_call(reason="mc_not_found")`; add a default critical invariant that no rate is quoted before a successful `get_load_context` result.
 - Acceptance: safe retry/error scenarios preserve the exact fake result in model context; the third `not_found` scenario calls `verify_carrier` and then ends with `mc_not_found`; deliberately quoting a currency or spoken rate before successful load lookup fails with event-level evidence.
@@ -46,15 +46,14 @@ The offline scripted model also validates critical prompt-contract clauses befor
 
 ## T4.2 · Critical prompt mutation sensitivity   tier: signature   status: todo
 - Serves: R2-R4, R8-R9 (C1-C4)
-- Scope: introduce a test-only prompt transformation seam, delete one critical clause from the real rendered prompt, run the normal suite, and prove a critical prompt-contract check fails without editing or copying the production prompt.
-- Acceptance: the unmodified production prompt passes; the mutated prompt fails for the deleted clause with the clause/check identifier in evidence; the test cannot pass solely because a scripted expected response changed.
-- Test first: mutation test demonstrates the current suite's blind spot before the contract check is added.
+- Scope: define one evaluator-owned list of critical prompt clauses, each mapped to the behavioral check it protects; verify that list against every rendered initial and negotiation prompt as a default invariant, outside scripted-model steps. Exclude clauses already covered by `voice-agent/tests/test_voice_prompt_guardrails.py`. Add a test-only prompt transformation seam and delete each listed clause in turn.
+- Acceptance: every unmodified rendered prompt satisfies its applicable critical clauses; each single-clause mutation fails with the clause id and protected check in evidence; scenario scripts contain no prompt-clause assertions for this contract.
+- Test first: parameterized mutation test deletes each listed clause and proves the default prompt-contract invariant fails.
 
 ## T4.3 · System map, risk coverage, and production code gaps   tier: mvp   status: todo
 - Serves: R1-R4, R6-R10 (C3-C6)
 - Scope: extend `DESIGN.md` with a concise end-to-end system map, a table mapping each product risk to its scenario/check/evidence and gating status, and a clearly labeled list of production gaps discovered during evaluation, including `record_agreement` not enforcing `maxRate` and `get_load_context` not enforcing verified identity.
-- Acceptance: every critical default invariant and scenario-specific check appears in the risk table; inferred gaps are distinguished from code-confirmed gaps; the map covers prompts, model turns, tools, external side effects, persisted data, and termination.
-- Test first: documentation coverage check asserts the named critical checks and confirmed code gaps are present.
+- Acceptance: every critical default invariant and scenario-specific check appears in the risk table; inferred gaps are distinguished from code-confirmed gaps; the map covers prompts, model turns, tools, external side effects, persisted data, and termination. Review manually; do not add tests that grep `DESIGN.md` or the README.
 
 ## T5 · Gate, evidence, documentation, and CI   tier: mvp   status: todo
 - Serves: all deliverables (C3-C6)
@@ -73,14 +72,6 @@ The offline scripted model also validates critical prompt-contract clauses befor
 - Which caller identity path is release-critical, MC-first or phone-first? Assume MC-first for these pricing scenarios; phone-first remains a separate future scenario because the feature flag defaults off.
 - Are synthetic callers sufficient for initial acceptance? Assume yes for the requested pricing invariants; redacted production transcripts are the next dataset source.
 - What latency and audio thresholds apply? Assume none for this text runner; report ASR, TTS, barge-in, and caller-heard latency as not measured.
-
-## Estimate and freeze plan
-
-- At 23:22Z, 28 minutes remain until the requested 23:50Z freeze.
-- Full revised scope is 40 to 50 minutes plus final-check time: T2 15 to 20, T3 10 to 12, T4 10 to 12, T5 8 to 10.
-- To freeze by 23:50Z: deliver T2 and T3 first, then the pass^k metric and tested model interface from T4 if time remains. At 23:45Z, stop new code and finish the current coherent slice.
-- Cut before freeze: real network execution, token/cost polish, CI workflow edit, broad scenario coverage, and report cosmetics. Preserve the live adapter contract in the design and implement it only if T2 and T3 are green by 23:40Z.
-- After freeze: use remaining session time only for T5 documentation/evidence and `final-check`; submission remains a separate turn.
 
 ## Disagreements and risks
 
