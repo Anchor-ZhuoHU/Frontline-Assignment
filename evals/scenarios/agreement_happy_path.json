@@ -9,6 +9,7 @@
     "load": {"bookNowRate": 1650, "maxRate": 1800}
   },
   "expected": {
+    "transfer": false,
     "checks": [
       {
         "id": "agreement.correct_price",

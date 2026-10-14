@@ -31,6 +31,7 @@
     }
   },
   "expected": {
+    "transfer": false,
     "checks": [
       {
         "id": "agreement.correct_price",

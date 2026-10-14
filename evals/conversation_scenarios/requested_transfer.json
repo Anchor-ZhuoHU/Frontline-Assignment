@@ -12,9 +12,7 @@
       "transfer_call_to": "+15550100100", "transfer_country_code": "+1"
     }
   },
-  "expected": {"checks": [
-    {"id": "transfer.authorized", "type": "transfer_authorized", "severity": "critical"}
-  ]},
+  "expected": {"transfer": true, "checks": []},
   "script": [
     {"text": "Let me check.", "tool_calls": [{"id": "verify-1", "name": "verify_carrier", "args": {"mc_number": "123456"}}]},
     {"expect_last_tool_result": {"status": "success"}, "text": "Is this Example Transport?"},

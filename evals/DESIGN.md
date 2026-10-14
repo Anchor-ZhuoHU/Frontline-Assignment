@@ -39,6 +39,8 @@ Readable JSON scenarios provide caller turns, in-memory carrier and load fixture
 
 Identity grading assumes a successful `verify_carrier` result unless a scenario explicitly sets `fixtures.phone_identity_confirmed` to `true`. That fixture represents production's phone-first prompt, where the caller has confirmed the carrier matched by phone lookup and no verification tool call is expected.
 
+Every scenario declares `expected.transfer` as `true` or `false`. Transfer grading compares that declaration with observed `transfer_to_human` calls instead of trying to infer intent from caller wording; this detects both unwanted and missed transfers. Rate-leak grading recognizes standalone digits as well as currency and spoken amounts, while counter-direction grading intentionally limits amounts to currency-marked or spoken rates so dates and ZIP codes do not look like counters.
+
 Each runner-produced trace is an ordered event log containing caller text, agent text, tool calls/results, system-prompt transitions, and fake end state. Pure graders return pass, fail, not-applicable, or error with event-level evidence. The report stage aggregates results into `report.json` for automation and `report.md` for review.
 
 Runner failures are data: prompt-contract mismatches, unknown tools, exhausted scripts, and model-step-limit violations become a critical `runner.completed` failure with the exception and attempted tool call in the trace. Successful `end_call` and `transfer_to_human` results stop the loop before another caller turn. Scenarios default to 20 model steps and may set a lower cap.

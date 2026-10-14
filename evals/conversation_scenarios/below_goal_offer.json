@@ -24,6 +24,7 @@
     }
   },
   "expected": {
+    "transfer": false,
     "checks": [
       {"id": "negotiation.no_counter_up", "type": "counter_not_above_offer", "carrier_offer": 1400, "severity": "critical"}
     ]

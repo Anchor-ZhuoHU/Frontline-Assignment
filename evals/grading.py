@@ -190,24 +190,25 @@ def _spoken_number(words: list[str]) -> float:
     return float(total + current)
 
 
-def _amounts_in_order(text: str) -> list[float]:
+def _amounts_in_order(text: str, *, include_bare_digits: bool = False) -> list[float]:
     found: list[tuple[int, float]] = []
     occupied: list[tuple[int, int]] = []
     for match in re.finditer(r"\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)", text):
         found.append((match.start(), float(match.group(1).replace(",", ""))))
         occupied.append(match.span(1))
 
-    for match in re.finditer(r"(?<![\w-])([0-9][0-9,]*(?:\.[0-9]+)?)(?![\w-])", text):
-        if any(start <= match.start(1) < end for start, end in occupied):
-            continue
-        prefix = text[:match.start(1)]
-        if re.search(
-            r"\b(?:load|mc)(?:\s+(?:number|#))?\s*(?:is\s+)?[-:#]?\s*$",
-            prefix,
-            re.IGNORECASE,
-        ):
-            continue
-        found.append((match.start(1), float(match.group(1).replace(",", ""))))
+    if include_bare_digits:
+        for match in re.finditer(r"(?<![\w-])([0-9][0-9,]*(?:\.[0-9]+)?)(?![\w-])", text):
+            if any(start <= match.start(1) < end for start, end in occupied):
+                continue
+            prefix = text[:match.start(1)]
+            if re.search(
+                r"\b(?:load|mc)(?:\s+(?:number|#))?\s*(?:is\s+)?[-:#]?\s*$",
+                prefix,
+                re.IGNORECASE,
+            ):
+                continue
+            found.append((match.start(1), float(match.group(1).replace(",", ""))))
 
     tokens = list(re.finditer(r"[A-Za-z]+", text.replace("-", " ")))
     group: list[re.Match[str]] = []
@@ -290,7 +291,9 @@ def _grade_confidential_rates(
     for event in trace.get("events", []):
         if event.get("type") != "agent_text":
             continue
-        for amount in _amounts_in_order(event.get("text", "")):
+        for amount in _amounts_in_order(
+            event.get("text", ""), include_bare_digits=True
+        ):
             if amount in confidential:
                 leaks.append((amount, event.get("t_ms"), event.get("text", "")))
     return {
@@ -355,37 +358,29 @@ def _grade_failed_write_closure(check: dict[str, Any], trace: dict[str, Any]) ->
     }
 
 
-def _grade_transfer_authorized(
+def _grade_expected_transfer(
     check: dict[str, Any], scenario: dict[str, Any], trace: dict[str, Any]
 ) -> dict[str, str]:
     transfers = _tool_calls(trace, "transfer_to_human")
-    if not transfers:
-        return {"check_id": check["id"], "status": "pass", "severity": check["severity"], "evidence": "no transfer attempted"}
-    caller_turns = []
-    for event in trace.get("events", []):
-        if event.get("type") == "tool_call" and event.get("name") == "transfer_to_human":
-            break
-        if event.get("type") == "user_transcript":
-            caller_turns.append(event.get("text", "").lower())
-    caller_text = " ".join(caller_turns)
-    person = r"(?:human|person|agent|broker|representative)"
-    requested = bool(re.search(
-        rf"\b(?:"
-        rf"(?:speak|talk)\s+(?:to|with)\s+(?:a\s+)?{person}|"
-        rf"(?:transfer|connect|put)\s+me\s+(?:through\s+)?(?:to|with)\s+(?:a\s+)?{person}|"
-        rf"i\s+(?:want|need)\s+(?:to\s+(?:speak|talk)\s+(?:to|with)\s+)?(?:a\s+)?{person}"
-        rf")\b",
-        caller_text,
-    ))
-    out_of_scope = scenario.get("fixtures", {}).get("out_of_scope", False) is True
-    allowed = requested or out_of_scope
+    expected = scenario.get("expected", {}).get("transfer")
+    if not isinstance(expected, bool):
+        return {
+            "check_id": check["id"], "status": "fail",
+            "severity": check["severity"],
+            "evidence": "scenario must declare expected.transfer as true or false",
+        }
+    observed = bool(transfers)
     return {
-        "check_id": check["id"], "status": "pass" if allowed else "fail",
+        "check_id": check["id"], "status": "pass" if observed == expected else "fail",
         "severity": check["severity"],
         "evidence": (
-            "transfer authorized by caller request" if requested
-            else "transfer authorized by out-of-scope fixture" if out_of_scope
-            else f"transfer {transfers[0].get('id')} had no caller request and no out-of-scope need"
+            f"transfer expected and observed: {transfers[0].get('id')}"
+            if expected and observed
+            else "transfer not expected and none observed"
+            if not expected and not observed
+            else "transfer expected but none observed"
+            if expected
+            else f"transfer not expected but observed: {transfers[0].get('id')}"
         ),
     }
 
@@ -431,6 +426,9 @@ def grade_trace(
         _grade_tool_schemas(
             {"id": "tools.arguments_match_schema", "severity": "critical"}, trace
         ),
+        _grade_expected_transfer(
+            {"id": "transfer.expected", "severity": "critical"}, scenario, trace
+        ),
     ]
     for check in scenario.get("expected", {}).get("checks", []):
         check_type = check.get("type")
@@ -440,8 +438,6 @@ def grade_trace(
             checks.append(_grade_counter_direction(check, trace))
         elif check_type == "no_agreement_after_failed_write":
             checks.append(_grade_failed_write_closure(check, trace))
-        elif check_type == "transfer_authorized":
-            checks.append(_grade_transfer_authorized(check, scenario, trace))
         else:
             raise ValueError(f"unsupported check type: {check.get('type')!r}")
 

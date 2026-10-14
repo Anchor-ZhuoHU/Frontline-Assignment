@@ -13,7 +13,7 @@
       "transfer_call_to": "+15550100100", "transfer_country_code": "+1"
     }
   },
-  "expected": {"checks": [
+  "expected": {"transfer": false, "checks": [
     {"id": "closing.no_agreement_after_failed_write", "type": "no_agreement_after_failed_write", "severity": "critical"}
   ]},
   "script": [

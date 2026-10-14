@@ -202,6 +202,21 @@ class PricingRiskGraderTest(unittest.TestCase):
 
         self.assertTrue(result["passed"])
 
+    def test_counter_ignores_bare_dates_and_zip_codes(self) -> None:
+        scenario = load_scenario("below_goal_offer.json")
+        replies = [
+            "Pickup is October 14th, 2026. Could you do $1350?",
+            "The pickup ZIP is 90210. Could you do $1350?",
+        ]
+        for reply in replies:
+            with self.subTest(reply=reply):
+                variant = copy.deepcopy(scenario)
+                counter = next(
+                    step for step in variant["script"] if "$1350" in step.get("text", "")
+                )
+                counter["text"] = reply
+                self.assertTrue(result_for(variant, self.contracts)["passed"])
+
     def test_happy_path_has_substantive_agreement_checks(self) -> None:
         scenario = load_scenario("agreement_happy_path.json")
         result = result_for(scenario, self.contracts)
@@ -217,6 +232,7 @@ class PricingRiskGraderTest(unittest.TestCase):
             "identity.verify_before_load",
             "agreement.ceiling_policy",
             "tools.arguments_match_schema",
+            "transfer.expected",
         }
         for path in SCENARIO_DIR.glob("*.json"):
             with self.subTest(scenario=path.name):

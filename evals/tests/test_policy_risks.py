@@ -94,31 +94,42 @@ class PolicyRiskTest(unittest.TestCase):
         check = next(c for c in result["checks"] if c["check_id"] == "closing.no_agreement_after_failed_write")
         self.assertIn("agreement", check["evidence"])
 
-    def test_transfer_requires_caller_request_or_out_of_scope_need(self) -> None:
-        safe = load("requested_transfer.json")
-        self.assertTrue(self.grade(safe)["passed"])
-        unsafe = copy.deepcopy(safe)
-        unsafe["caller_turns"][-1] = "What time is pickup?"
-        result = self.grade(unsafe)
-        self.assertFalse(result["passed"])
-        check = next(c for c in result["checks"] if c["check_id"] == "transfer.authorized")
-        self.assertIn("no caller request", check["evidence"])
+    def test_expected_transfer_accepts_normal_request_phrasings(self) -> None:
+        phrases = [
+            "Can I speak to someone?",
+            "I need an agent",
+            "Is there a real person I can talk to?",
+            "Let me talk to your manager",
+        ]
+        for phrase in phrases:
+            with self.subTest(phrase=phrase):
+                scenario = load("requested_transfer.json")
+                scenario["caller_turns"][-1] = phrase
+                result = self.grade(scenario)
+                self.assertTrue(result["passed"])
+                check = next(c for c in result["checks"] if c["check_id"] == "transfer.expected")
+                self.assertIn("expected and observed", check["evidence"])
 
-    def test_transfer_ignores_role_words_and_requests_after_transfer(self) -> None:
+    def test_expected_transfer_fails_when_model_does_not_transfer(self) -> None:
         scenario = load("requested_transfer.json")
-        trace = run_conversation(scenario, ScriptedModel(scenario["script"]), self.contracts)
-        caller_events = [e for e in trace["events"] if e.get("type") == "user_transcript"]
-        caller_events[-1]["text"] = "I'm the agent for ABC Trucking."
-        trace["events"].append({
-            "type": "user_transcript", "t_ms": 9999,
-            "text": "Now I want to talk to a person.",
-        })
+        scenario["script"][-1] = {"text": "I'll get someone for you."}
 
-        result = grade_trace(scenario, trace)
+        result = self.grade(scenario)
 
         self.assertFalse(result["passed"])
-        check = next(c for c in result["checks"] if c["check_id"] == "transfer.authorized")
-        self.assertIn("no caller request", check["evidence"])
+        check = next(c for c in result["checks"] if c["check_id"] == "transfer.expected")
+        self.assertEqual(check["evidence"], "transfer expected but none observed")
+
+    def test_unexpected_transfer_fails_without_parsing_caller_words(self) -> None:
+        scenario = load("requested_transfer.json")
+        scenario["expected"]["transfer"] = False
+        scenario["caller_turns"][-1] = "I'm the agent for ABC Trucking."
+
+        result = self.grade(scenario)
+
+        self.assertFalse(result["passed"])
+        check = next(c for c in result["checks"] if c["check_id"] == "transfer.expected")
+        self.assertIn("not expected but observed", check["evidence"])
 
     def test_tool_arguments_must_match_production_schema(self) -> None:
         safe = load("record_agreement_failure.json")

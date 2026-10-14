@@ -22,7 +22,7 @@
       "transfer_call_to": "+15550100100", "transfer_country_code": "+1"
     }
   },
-  "expected": {"checks": []},
+  "expected": {"transfer": false, "checks": []},
   "script": [
     {
       "expect_system_contains": ["MANDATORY TOOL-CALL RULE"],
