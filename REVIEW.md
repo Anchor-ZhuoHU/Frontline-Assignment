@@ -18,7 +18,7 @@ The design is thoughtful about answer gating, move reconciliation, and several t
 | Severity | Findings | Must-fix |
 | --- | ---: | ---: |
 | Critical | 6 | 6 |
-| High | 3 | 3 |
+| High | 5 | 5 |
 | Medium | 2 | 0 |
 | Low | 0 | 0 |
 
@@ -31,7 +31,7 @@ The design is thoughtful about answer gating, move reconciliation, and several t
 | PR `f93f7a5` | `python3 -m pytest tests -v --tb=short` | Blocked before collection by the same missing `pytest`; no pass count is claimed. |
 | PR `f93f7a5` | `python3 -m compileall -q voice-agent shared scripts` | Passed, exit 0. |
 | SDK source | `python3 -m zipfile -l /tmp/livekit_protocol-1.1.27-py3-none-any.whl \| rg 'livekit/protocol/(models\|models_pb2\|webhook)'` | Exit 0: the wheel lists `models.py`, `models.pyi`, `webhook.py`, and `webhook.pyi`; it contains no `models_pb2` module. |
-| PR `f93f7a5` race reproduction | `python3 /tmp/reproduce_transfer_carrier_races.py` | Passed, exit 0. The script loads the real pinned `orchestrator.py` and `transfer_state.py` via `git show` and stubs only external telephony, notification, logging, and Pipecat-facing boundaries. Both carrier-departure races reproduced; event order is recorded in F5. |
+| PR `f93f7a5` race reproduction | `python3 /tmp/reproduce_transfer_carrier_races.py` | Passed, exit 0. The script loads the real pinned `orchestrator.py` and `transfer_state.py` via `git show` and stubs only external telephony, notification, logging, and Pipecat-facing boundaries. Four controlled schedules reproduced; event orders are recorded in F5, F9, and F10. |
 
 Base and head test counts and installed-library probes are unavailable because the requested isolated environment could not be created. No suite was rerun and no SDK reproduction script was run after the setup failure.
 
@@ -126,7 +126,27 @@ I also compared the PR fakes with the actual Pipecat 0.0.95 and LiveKit SDK sour
 - Fix: Create a durable outbound-attempt record and atomically reserve runner capacity before dialing. Start and health-check the bot in the room before placing the carrier leg, or use an explicit reservation token that the bot start must honor. Run the bounded dial workflow asynchronously and return 202 with an attempt ID immediately; persist state transitions and normalized terminal reasons such as busy, no-answer, timeout, bot-unavailable, and provider-error. On dial failure, cancel the reserved bot, delete the room idempotently, release capacity, and retain the failure record. Never ring unless an agent slot is guaranteed.
 - Test: With a busy runner, assert the endpoint does not call `dial_phone()` and returns a stable capacity response with a recorded failed/rejected attempt. With a dial fake blocked on an event, assert the HTTP request returns 202 before answer and the attempt remains `dialing`. Parameterize busy, no-answer, timeout, and provider error; assert each persists its reason, deletes Room1 once, releases the reservation, and never surfaces as an unclassified 500. In the success case, assert agent readiness/reservation precedes dialing and the same attempt record gains the provider call ID.
 
-#### F9. There is no safe cutover or rollback path after deleting Daily
+#### F9. The consultation deadline can fail a handoff while the participant move is still in flight
+
+- Severity: High
+- Label: must-fix
+- Location: `voice-agent/orchestrator.py:245`, `voice-agent/orchestrator.py:284`, `voice-agent/orchestrator.py:369`
+- Scenario: The Room2 LLM requests handoff near the consultation deadline. `execute_transfer_human_to_room1()` transitions to `HANDOFF_REQUESTED` and awaits `move_participant_verified()`, but the original consultation timer at line 246 continues independently. If it expires first, `_terminal_failure()` marks the attempt failed, stops the Room2 pipeline, deletes Room2, restores the Room1 bot, and marks the transfer complete. The in-flight move can then succeed. `_complete_handoff()` sees `_transfer_in_progress=False` and removes the broker who just arrived in Room1 at line 372. The carrier hears a failure recovery while the requested, successful handoff is immediately undone.
+- Cause: Consultation timeout and handoff execution are separate tasks competing to terminalize the same attempt. Starting a handoff neither cancels/transfers ownership of the consultation deadline nor waits for the move outcome before destructive failure cleanup. `_cleanup_lock` serializes each cleanup block but does not decide which terminal outcome owns the attempt.
+- Fix: Once `HANDOFF_REQUESTED` is accepted, atomically stop the consultation deadline and transfer terminal ownership to one bounded handoff operation. Do not delete Room2 or restore Room1 while a move outcome is pending. Use the attempt ID and a single terminal arbiter so timeout, move completion, and departure callbacks reconcile participant location before choosing success or recovery.
+- Test: Block `move_participant_verified()` until after the consultation deadline, then release it as a success. Assert no failure cleanup runs during the move, the broker remains in Room1, and exactly one terminal state is committed. The reproduction event order was: `move enter → consultation timeout → Room2 pipeline stop → delete Room2 → restore primary → failure announcement → phase=failed → move success into Room1 → remove broker from Room1 → final phase=failed`.
+
+#### F10. An ambiguous move can leave the carrier in dead air and leak Room1 after departure
+
+- Severity: High
+- Label: must-fix
+- Location: `voice-agent/orchestrator.py:294`, `voice-agent/orchestrator.py:326`, `voice-agent/orchestrator.py:496`, `voice-agent/livekit_transfer_media.py:167`
+- Scenario: `move_participant_verified()` reports `ParticipantMoveOutcomeUnknown` and the broker did not arrive in Room1. `_terminal_failure()` deletes Room2, then `quarantine_ambiguous_handoff()` stops hold while retaining the observer and detaches the primary bot publisher. No code subsequently checks either room to determine where the broker actually is. The carrier therefore has neither broker, hold audio, nor bot audio. When the carrier eventually hangs up, `on_handoff_ended()` ignores the `FAILED` phase at line 339, so Room1 is not deleted, the observer is not stopped, and the primary pipeline is not ended.
+- Cause: Quarantine is implemented as a terminal state rather than a bounded reconciliation state with an owner and deadline. The participant-location uncertainty is never resolved, and departure cleanup handles only `HANDOFF_REQUESTED` and `HANDOFF_COMPLETE`, excluding the quarantined `FAILED` call.
+- Fix: Represent ambiguous handoff as a nonterminal reconciliation phase. Poll both rooms by stable broker identity until a bounded deadline: if the broker is in Room1, complete handoff; if still in Room2, remove it and restore the bot; if in neither room, restore the bot and announce failure. Keep the observer only while reconciliation is active. Regardless of outcome, process carrier/broker departure during quarantine and idempotently stop the observer/pipeline and delete Room1. Escalate unresolved location to durable cleanup work rather than abandoning the call.
+- Test: Make the move outcome ambiguous with no broker in either room. Assert bounded reconciliation restores Room1 audio, then carrier departure deletes Room1 and ends the observer/pipeline. Also test ambiguous-but-arrived and ambiguous-still-in-Room2 outcomes. The no-arrival reproduction order was: `move outcome unknown → stop Room2 pipeline → delete Room2 → quarantine → stop hold(retain observer) → detach bot publisher → phase=failed → carrier disconnect → zero callback side effects → Room1 still owned`.
+
+#### F11. There is no safe cutover or rollback path after deleting Daily
 
 - Severity: High
 - Label: must-fix
@@ -138,7 +158,7 @@ I also compared the PR fakes with the actual Pipecat 0.0.95 and LiveKit SDK sour
 
 ### Medium
 
-#### F10. Fixing participant identity lookup will expose caller phone numbers in new logs
+#### F12. Fixing participant identity lookup will expose caller phone numbers in new logs
 
 - Severity: Medium
 - Label: suggestion
@@ -148,7 +168,7 @@ I also compared the PR fakes with the actual Pipecat 0.0.95 and LiveKit SDK sour
 - Fix: Never log participant identity or phone attributes directly. Log an internal call ID and opaque event/participant SID, mask any operationally necessary number, and document or provision `hide_phone_number` on the inbound dispatch rule. Audit exception logging for provider payloads as part of the same change.
 - Test: Feed an inbound participant whose identity is an E.164 number, capture info-level logs, and assert neither the full number nor transcript content appears.
 
-#### F11. Webhook deduplication is racy and process-local
+#### F13. Webhook deduplication is racy and process-local
 
 - Severity: Medium
 - Label: suggestion
@@ -181,9 +201,9 @@ This remains unqualified against a real call. `wait_until_answered` treats voice
 | --- | --- | --- | --- |
 | R1 | Migrate webhook, rooms, Pipecat transport, and outbound dialing from Daily to LiveKit/Telnyx. | Not met | Real inbound events are rejected, normal termination and idle lifecycle are not equivalent, and outbound dialing precedes agent admission and persistence (F1, F6, F7, F8). |
 | R2 | Preserve the single-prompt negotiation architecture. | Met | Room1 retains one context and existing tool handlers in `voice-agent/bot.py`. |
-| R3 | Keep the carrier connected and privately brief the broker before handoff. | Not met | The carrier audio is not gated from the Room1 model/transcript (F2), and the real broker is rejected before briefing because SID and identity are confused (F3). |
-| R4 | Distinguish answer from early media and verify participant movement before success. | Met in code, not integration-tested | Answer plus subscribed-audio gates and destination reconciliation are present; declared tests could not run locally. |
-| R5 | Clean both rooms across success, failure, disconnect, timeout, and competing callbacks. | Not met | Failed-transfer recovery is silent, carrier departure can resurrect a cancelled attempt and leak late resources, normal-call rooms are omitted, and webhook idempotency is racy (F4, F5, F6, F11). |
+| R3 | Keep the carrier connected and privately brief the broker before handoff. | Not met | Carrier audio is not gated from the Room1 model/transcript, the broker is rejected before briefing, and ambiguous handoff can leave the carrier with no audio path (F2, F3, F10). |
+| R4 | Distinguish answer from early media and verify participant movement before success. | Not met | Answer/media gates exist, but the consultation timeout races a verified move and an unknown move outcome is never reconciled (F9, F10). |
+| R5 | Clean both rooms across success, failure, disconnect, timeout, and competing callbacks. | Not met | Carrier departure can resurrect a cancelled attempt, timeout can race a move, quarantine leaks Room1, normal-call rooms are omitted, and webhook idempotency is racy (F5, F6, F9, F10, F13). |
 | R6 | Record transfer only after broker arrival; preserve transcript and consultation recording references. | Met in code, not integration-tested | `HANDOFF_COMPLETE` follows verified movement; audit data is appended during finalization. |
 | R7 | Isolate Slack failure and attribute records by provider. | Met in code | Notification exceptions are isolated; schema and dashboard add provider fields. |
 | R8 | Provide merge-ready evidence and operational safety for a real-time calling migration. | Not met | Tests were not runnable in this environment, ingress, media-gate, and Room2 participant fakes do not model the resolved libraries' behavior, and no cutover/rollback exists. |
